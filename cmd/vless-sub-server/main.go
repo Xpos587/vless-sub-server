@@ -21,6 +21,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/format"
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
+	"github.com/michael/vless-sub-server/internal/pipeline"
 	"github.com/michael/vless-sub-server/internal/probe"
 	"github.com/michael/vless-sub-server/internal/rename"
 )
@@ -149,42 +150,28 @@ func refreshSubscriptions() {
 	parseResult := parse.ParseAllLines(allLines)
 	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
 
-	// Phase 3: DNS
-	uniqueHosts := make(map[string]bool)
-	for _, r := range filtered {
-		uniqueHosts[r.Host] = true
-	}
-	hostList := make([]string, 0, len(uniqueHosts))
-	for h := range uniqueHosts {
-		hostList = append(hostList, h)
-	}
-	dnsMap := dns.ResolveHosts(ctx, hostList, 20, cfg.DNSTimeout)
+	// Phase 3+4: DNS resolve + TCP probe (via pipeline package)
+	result := pipeline.ProbeAndFilter(ctx, filtered, 20, cfg.DNSTimeout, cfg.TCPTimeout)
+	aliveProxies := result.Alive
 
-	var withDNS []parse.ProxyRecord
-	for _, r := range filtered {
-		if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-			withDNS = append(withDNS, r)
+	// Reconstruct dnsMap from pipeline results (needed for geo isLAN checks)
+	dnsMap := make(map[string]*dns.DNSResult)
+	for _, p := range aliveProxies {
+		if p.DNS != nil {
+			dnsMap[p.Record.Host] = p.DNS
 		}
 	}
 
-	// Phase 4: TCP probes
-	probeHosts := make([]probe.HostSpec, len(withDNS))
-	for i, r := range withDNS {
-		probeHosts[i] = probe.HostSpec{
-			Host: r.Host,
-			IP:   dnsMap[r.Host].IP,
-			Port: r.Port,
-		}
+	// Reconstruct probeResults for rename.RenameAll
+	probeResults := make(map[string]*probe.ProbeResult)
+	for _, p := range aliveProxies {
+		key := fmt.Sprintf("%s:%d", p.Record.Host, p.Record.Port)
+		probeResults[key] = p.Probe
 	}
-	probeResults := probe.TCPProbeAll(ctx, probeHosts, 20, cfg.TCPTimeout)
 
-	// Collect alive proxies
 	var aliveRecords []parse.ProxyRecord
-	for _, r := range withDNS {
-		key := fmt.Sprintf("%s:%d", r.Host, r.Port)
-		if p, ok := probeResults[key]; ok && p.Reachable {
-			aliveRecords = append(aliveRecords, r)
-		}
+	for _, p := range aliveProxies {
+		aliveRecords = append(aliveRecords, p.Record)
 	}
 
 	// Phase 5: Exit-IP probe via Xray
@@ -199,13 +186,12 @@ func refreshSubscriptions() {
 		ep := exitprobe.NewExitProber(cfg)
 		if err := ep.StartWithProxies(aliveRecords); err != nil {
 			log.Printf("[refresh] xray start failed: %v, proceeding without exit-IP geo", err)
-			for _, r := range aliveRecords {
-				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
+			for _, p := range aliveProxies {
 				geoRecords = append(geoRecords, struct {
 					Record parse.ProxyRecord
 					Geo    *geo.GeoInfo
 					IsLAN  bool
-				}{r, nil, isLAN})
+				}{p.Record, nil, p.IsLAN})
 			}
 		} else {
 			exitResults := ep.ProbeAll(ctx, aliveRecords)
@@ -235,34 +221,25 @@ func refreshSubscriptions() {
 				}{r, geoInfo, isLAN})
 			}
 		}
-	} else {
-		for _, r := range withDNS {
-			isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
-			geoRecords = append(geoRecords, struct {
-				Record parse.ProxyRecord
-				Geo    *geo.GeoInfo
-				IsLAN  bool
-			}{r, nil, isLAN})
-		}
 	}
 
 	// Phase 6: Rename
 	renamed := rename.RenameAll(geoRecords, probeResults)
 
 	totalAlive := len(renamed)
-	totalDead := len(withDNS) - totalAlive
+	totalDead := result.DNSResolved - totalAlive
 
 	output := format.FormatOutput(renamed, format.FormatMetadata{
-		TotalFetched:   len(allLines),
-		TotalParsed:    len(filtered),
-		TotalSkipped:   parseResult.Skipped,
-		TotalDuplicates: parseResult.Duplicates,
-		TotalAlive:     totalAlive,
-		TotalDead:      totalDead,
-		SourcesOK:      sourcesOK,
-		SourcesFailed:  sourcesFailed,
-		GeoAvailable:   geoAvailable,
-		GeoTotal:       len(withDNS),
+		TotalFetched:    len(allLines),
+		TotalParsed:     len(filtered),
+		TotalSkipped:    parseResult.Skipped,
+		TotalDuplicates:  parseResult.Duplicates,
+		TotalAlive:      totalAlive,
+		TotalDead:       totalDead,
+		SourcesOK:       sourcesOK,
+		SourcesFailed:   sourcesFailed,
+		GeoAvailable:    geoAvailable,
+		GeoTotal:        result.DNSResolved,
 	})
 
 	cachedOutput = output
