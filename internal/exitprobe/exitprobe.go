@@ -351,7 +351,7 @@ func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
 					"users": []map[string]any{
 						{
 							"id":         rec.UUIDOrPassword,
-							"encryption": "none",
+							"encryption": vlessEncryption(rec),
 						},
 					},
 				},
@@ -503,4 +503,11 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 	}
 
 	return ss
+}
+
+func vlessEncryption(rec parse.ProxyRecord) string {
+	if enc, ok := rec.QueryParams["encryption"]; ok && enc != "" && enc != "none" {
+		return enc
+	}
+	return "none"
 }
