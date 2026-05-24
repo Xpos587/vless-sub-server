@@ -1,0 +1,96 @@
+package dns
+
+import (
+	"context"
+	"net"
+	"time"
+
+	"github.com/miekg/dns"
+)
+
+type DNSResult struct {
+	IP        string
+	IsPrivate bool
+}
+
+func ResolveHosts(hosts []string, maxConcurrent int, timeout time.Duration) map[string]*DNSResult {
+	results := make(map[string]*DNSResult, len(hosts))
+	type kv struct {
+		key string
+		val *DNSResult
+	}
+	ch := make(chan kv, len(hosts))
+	sem := make(chan struct{}, maxConcurrent)
+
+	for _, h := range hosts {
+		sem <- struct{}{}
+		go func(host string) {
+			defer func() { <-sem }()
+			ip, isPrivate := resolveWithRetry(host, timeout)
+			ch <- kv{host, &DNSResult{IP: ip, IsPrivate: isPrivate}}
+		}(h)
+	}
+
+	for range hosts {
+		r := <-ch
+		results[r.key] = r.val
+	}
+	return results
+}
+
+func resolveWithRetry(host string, timeout time.Duration) (string, bool) {
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateIP(ip) {
+			return host, true
+		}
+		return host, false
+	}
+
+	if ip, ok := resolveOne(host, timeout); ok {
+		return ip, isPrivateIPStr(ip)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if ip, ok := resolveOne(host, timeout); ok {
+		return ip, isPrivateIPStr(ip)
+	}
+	return "", false
+}
+
+func resolveOne(host string, timeout time.Duration) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(host), dns.TypeA)
+	m.RecursionDesired = true
+
+	c := new(dns.Client)
+	c.Timeout = timeout
+	r, _, err := c.ExchangeContext(ctx, m, "8.8.8.8:53")
+	if err != nil {
+		return "", false
+	}
+
+	if len(r.Answer) == 0 {
+		return "", false
+	}
+
+	for _, ans := range r.Answer {
+		if a, ok := ans.(*dns.A); ok {
+			return a.A.String(), false
+		}
+	}
+	return "", false
+}
+
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+func isPrivateIPStr(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	return isPrivateIP(ip)
+}
