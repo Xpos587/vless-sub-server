@@ -151,7 +151,7 @@ func refreshSubscriptions() {
 	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
 
 	// Phase 3+4: DNS resolve + TCP probe (via pipeline package)
-	result := pipeline.ProbeAndFilter(ctx, filtered, 20, cfg.DNSTimeout, cfg.TCPTimeout)
+	result := pipeline.ProbeAndFilterStream(ctx, filtered, 20, cfg.DNSTimeout, cfg.TCPTimeout)
 	aliveProxies := result.Alive
 
 	// Reconstruct dnsMap from pipeline results (needed for geo isLAN checks)

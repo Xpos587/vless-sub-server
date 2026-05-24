@@ -3,11 +3,13 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/probe"
+	"golang.org/x/sync/errgroup"
 )
 
 // ResolvedProxy holds a proxy record with its DNS resolution result.
@@ -74,6 +76,88 @@ func ProbeAndFilter(ctx context.Context, records []parse.ProxyRecord, maxConcurr
 	return ProbeAndFilterResult{
 		Alive:       alive,
 		DNSResolved: len(withDNS),
+	}
+}
+
+// ProbeAndFilterStream resolves DNS and TCP-probes with streaming overlap:
+// TCP probing begins as soon as the first DNS result arrives, rather than
+// waiting for all DNS resolutions to complete.
+func ProbeAndFilterStream(ctx context.Context, records []parse.ProxyRecord, maxConcurrent int, dnsTimeout, tcpTimeout time.Duration) ProbeAndFilterResult {
+	uniqueHosts := dedupHosts(records)
+
+	// Build host -> records index for fast lookup
+	hostToRecords := make(map[string][]parse.ProxyRecord)
+	for _, r := range records {
+		hostToRecords[r.Host] = append(hostToRecords[r.Host], r)
+	}
+
+	// Stage 1: Stream DNS results as they arrive
+	dnsCh := dns.ResolveStream(ctx, uniqueHosts, maxConcurrent, dnsTimeout)
+
+	// Stage 2: TCP probe each DNS result as it arrives (overlapping)
+	type probedResult struct {
+		Record parse.ProxyRecord
+		DNS    *dns.DNSResult
+		Probe  *probe.ProbeResult
+		IsLAN  bool
+	}
+	probedCh := make(chan probedResult, maxConcurrent)
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrent)
+	dnsResolved := 0
+	var mu sync.Mutex
+
+	go func() {
+		defer close(probedCh)
+		for dnsRes := range dnsCh {
+			if dnsRes.IP == "" {
+				continue
+			}
+			mu.Lock()
+			dnsResolved++
+			mu.Unlock()
+			for _, rec := range hostToRecords[dnsRes.Host] {
+				rec := rec
+				dnsRes := dnsRes
+				g.Go(func() error {
+					probeRes := probe.TCPProbeSingle(ctx, dnsRes.IP, rec.Port, tcpTimeout)
+					if probeRes.Reachable {
+						select {
+						case probedCh <- probedResult{
+							Record: rec,
+							DNS:    &dns.DNSResult{Host: dnsRes.Host, IP: dnsRes.IP, IsPrivate: dnsRes.IsPrivate},
+							Probe:  probeRes,
+							IsLAN:  dnsRes.IsPrivate,
+						}:
+						case <-ctx.Done():
+						}
+					}
+					return nil
+				})
+			}
+		}
+		g.Wait()
+	}()
+
+	// Collect results
+	var alive []ProbedProxy
+	for res := range probedCh {
+		alive = append(alive, ProbedProxy{
+			Record: res.Record,
+			DNS:    res.DNS,
+			Probe:  res.Probe,
+			IsLAN:  res.IsLAN,
+		})
+	}
+
+	mu.Lock()
+	resolved := dnsResolved
+	mu.Unlock()
+
+	return ProbeAndFilterResult{
+		Alive:       alive,
+		DNSResolved: resolved,
 	}
 }
 

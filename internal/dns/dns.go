@@ -11,6 +11,7 @@ import (
 )
 
 type DNSResult struct {
+	Host      string
 	IP        string
 	IsPrivate bool
 }
@@ -26,7 +27,7 @@ func ResolveHosts(ctx context.Context, hosts []string, maxConcurrent int, timeou
 		g.Go(func() error {
 			ip, isPrivate := resolveWithRetry(ctx, h, timeout)
 			mu.Lock()
-			results[h] = &DNSResult{IP: ip, IsPrivate: isPrivate}
+			results[h] = &DNSResult{Host: h, IP: ip, IsPrivate: isPrivate}
 			mu.Unlock()
 			return nil
 		})
@@ -99,4 +100,31 @@ func isPrivateIPStr(ipStr string) bool {
 		return false
 	}
 	return isPrivateIP(ip)
+}
+
+// ResolveStream resolves DNS for all hosts concurrently and streams results
+// as they become available, rather than waiting for all to complete.
+func ResolveStream(ctx context.Context, hosts []string, maxConcurrent int, timeout time.Duration) <-chan DNSResult {
+	out := make(chan DNSResult, maxConcurrent)
+
+	go func() {
+		defer close(out)
+		g, ctx := errgroup.WithContext(ctx)
+		g.SetLimit(maxConcurrent)
+
+		for _, h := range hosts {
+			h := h
+			g.Go(func() error {
+				ip, isPrivate := resolveWithRetry(ctx, h, timeout)
+				select {
+				case out <- DNSResult{Host: h, IP: ip, IsPrivate: isPrivate}:
+				case <-ctx.Done():
+				}
+				return nil
+			})
+		}
+		g.Wait()
+	}()
+
+	return out
 }

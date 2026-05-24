@@ -69,3 +69,13 @@ func tcpProbe(ctx context.Context, host string, port int, timeout time.Duration)
 	conn.Close()
 	return &ProbeResult{Reachable: true, LatencyMs: time.Since(start).Milliseconds()}
 }
+
+// TCPProbeSingle probes a single host:port and returns the result.
+func TCPProbeSingle(ctx context.Context, ip string, port int, timeout time.Duration) *ProbeResult {
+	select {
+	case <-ctx.Done():
+		return &ProbeResult{Reachable: false, FailureType: "canceled"}
+	default:
+	}
+	return tcpProbe(ctx, ip, port, timeout)
+}
