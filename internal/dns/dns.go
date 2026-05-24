@@ -13,7 +13,7 @@ type DNSResult struct {
 	IsPrivate bool
 }
 
-func ResolveHosts(hosts []string, maxConcurrent int, timeout time.Duration) map[string]*DNSResult {
+func ResolveHosts(ctx context.Context, hosts []string, maxConcurrent int, timeout time.Duration) map[string]*DNSResult {
 	results := make(map[string]*DNSResult, len(hosts))
 	type kv struct {
 		key string
@@ -26,7 +26,7 @@ func ResolveHosts(hosts []string, maxConcurrent int, timeout time.Duration) map[
 		sem <- struct{}{}
 		go func(host string) {
 			defer func() { <-sem }()
-			ip, isPrivate := resolveWithRetry(host, timeout)
+			ip, isPrivate := resolveWithRetry(ctx, host, timeout)
 			ch <- kv{host, &DNSResult{IP: ip, IsPrivate: isPrivate}}
 		}(h)
 	}
@@ -38,7 +38,7 @@ func ResolveHosts(hosts []string, maxConcurrent int, timeout time.Duration) map[
 	return results
 }
 
-func resolveWithRetry(host string, timeout time.Duration) (string, bool) {
+func resolveWithRetry(ctx context.Context, host string, timeout time.Duration) (string, bool) {
 	if ip := net.ParseIP(host); ip != nil {
 		if isPrivateIP(ip) {
 			return host, true
@@ -46,18 +46,27 @@ func resolveWithRetry(host string, timeout time.Duration) (string, bool) {
 		return host, false
 	}
 
-	if ip, ok := resolveOne(host, timeout); ok {
+	select {
+	case <-ctx.Done():
+		return "", false
+	default:
+	}
+	if ip, ok := resolveOne(ctx, host, timeout); ok {
 		return ip, isPrivateIPStr(ip)
 	}
-	time.Sleep(500 * time.Millisecond)
-	if ip, ok := resolveOne(host, timeout); ok {
+	select {
+	case <-time.After(500 * time.Millisecond):
+	case <-ctx.Done():
+		return "", false
+	}
+	if ip, ok := resolveOne(ctx, host, timeout); ok {
 		return ip, isPrivateIPStr(ip)
 	}
 	return "", false
 }
 
-func resolveOne(host string, timeout time.Duration) (string, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func resolveOne(ctx context.Context, host string, timeout time.Duration) (string, bool) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	m := new(dns.Msg)

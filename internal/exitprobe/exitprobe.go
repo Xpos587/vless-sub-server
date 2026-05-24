@@ -109,6 +109,12 @@ func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord)
 }
 
 func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.ProxyRecord) *ExitProbeResult {
+	select {
+	case <-ctx.Done():
+		return &ExitProbeResult{XrayOK: false}
+	default:
+	}
+
 	port, ok := ep.socksPorts[idx]
 	if !ok {
 		return &ExitProbeResult{XrayOK: false}

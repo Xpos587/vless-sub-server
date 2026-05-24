@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -13,7 +14,13 @@ type ProbeResult struct {
 	FailureType string // "refused", "timeout", "error"
 }
 
-func TCPProbeAll(hosts []struct{ Host, IP string; Port int }, maxConcurrent int, timeout time.Duration) map[string]*ProbeResult {
+type HostSpec struct {
+	Host string
+	IP   string
+	Port int
+}
+
+func TCPProbeAll(ctx context.Context, hosts []HostSpec, maxConcurrent int, timeout time.Duration) map[string]*ProbeResult {
 	results := make(map[string]*ProbeResult, len(hosts))
 	var mu sync.Mutex
 	sem := make(chan struct{}, maxConcurrent)
@@ -25,12 +32,17 @@ func TCPProbeAll(hosts []struct{ Host, IP string; Port int }, maxConcurrent int,
 		go func(host, ip string, port int) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			key := fmt.Sprintf("%s:%d", host, port)
 			target := ip
 			if target == "" {
 				target = host
 			}
-			result := tcpProbe(target, port, timeout)
+			result := tcpProbe(ctx, target, port, timeout)
 			mu.Lock()
 			results[key] = result
 			mu.Unlock()
@@ -41,10 +53,11 @@ func TCPProbeAll(hosts []struct{ Host, IP string; Port int }, maxConcurrent int,
 	return results
 }
 
-func tcpProbe(host string, port int, timeout time.Duration) *ProbeResult {
+func tcpProbe(ctx context.Context, host string, port int, timeout time.Duration) *ProbeResult {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	d := net.Dialer{Timeout: timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		ft := "error"
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {

@@ -126,7 +126,7 @@ func refreshSubscriptions() {
 	defer cancel()
 
 	// Phase 1: Fetch subscriptions
-	fetchResults := fetch.FetchSubscriptions(cfg.SubscriptionURLs, 8*time.Second)
+	fetchResults := fetch.FetchSubscriptions(ctx, cfg.SubscriptionURLs, 8*time.Second)
 	sourcesOK := 0
 	sourcesFailed := 0
 	for _, r := range fetchResults {
@@ -154,7 +154,7 @@ func refreshSubscriptions() {
 	for h := range uniqueHosts {
 		hostList = append(hostList, h)
 	}
-	dnsMap := dns.ResolveHosts(hostList, 20, cfg.DNSTimeout)
+	dnsMap := dns.ResolveHosts(ctx, hostList, 20, cfg.DNSTimeout)
 
 	var withDNS []parse.ProxyRecord
 	for _, r := range filtered {
@@ -164,15 +164,15 @@ func refreshSubscriptions() {
 	}
 
 	// Phase 4: TCP probes
-	probeHosts := make([]struct{ Host, IP string; Port int }, len(withDNS))
+	probeHosts := make([]probe.HostSpec, len(withDNS))
 	for i, r := range withDNS {
-		probeHosts[i] = struct{ Host, IP string; Port int }{
+		probeHosts[i] = probe.HostSpec{
 			Host: r.Host,
 			IP:   dnsMap[r.Host].IP,
 			Port: r.Port,
 		}
 	}
-	probeResults := probe.TCPProbeAll(probeHosts, 20, cfg.TCPTimeout)
+	probeResults := probe.TCPProbeAll(ctx, probeHosts, 20, cfg.TCPTimeout)
 
 	// Collect alive proxies
 	var aliveRecords []parse.ProxyRecord
