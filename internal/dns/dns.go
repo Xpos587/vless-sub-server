@@ -3,9 +3,11 @@ package dns
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
+	"golang.org/x/sync/errgroup"
 )
 
 type DNSResult struct {
@@ -15,26 +17,21 @@ type DNSResult struct {
 
 func ResolveHosts(ctx context.Context, hosts []string, maxConcurrent int, timeout time.Duration) map[string]*DNSResult {
 	results := make(map[string]*DNSResult, len(hosts))
-	type kv struct {
-		key string
-		val *DNSResult
-	}
-	ch := make(chan kv, len(hosts))
-	sem := make(chan struct{}, maxConcurrent)
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrent)
 
 	for _, h := range hosts {
-		sem <- struct{}{}
-		go func(host string) {
-			defer func() { <-sem }()
-			ip, isPrivate := resolveWithRetry(ctx, host, timeout)
-			ch <- kv{host, &DNSResult{IP: ip, IsPrivate: isPrivate}}
-		}(h)
+		h := h
+		g.Go(func() error {
+			ip, isPrivate := resolveWithRetry(ctx, h, timeout)
+			mu.Lock()
+			results[h] = &DNSResult{IP: ip, IsPrivate: isPrivate}
+			mu.Unlock()
+			return nil
+		})
 	}
-
-	for range hosts {
-		r := <-ch
-		results[r.key] = r.val
-	}
+	g.Wait()
 	return results
 }
 

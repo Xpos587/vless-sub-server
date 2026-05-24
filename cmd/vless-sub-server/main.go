@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
@@ -26,7 +28,7 @@ import (
 var (
 	cachedOutput string
 	lastRefresh  time.Time
-	refreshing   bool
+	refreshSF    singleflight.Group
 	cfg          *config.Config
 )
 
@@ -42,13 +44,21 @@ func main() {
 	log.Printf("[server] starting on :%d, refresh every %s", port, refreshInterval)
 
 	// Initial refresh
-	go refreshSubscriptions()
+	go func() {
+		refreshSF.Do("refresh", func() (interface{}, error) {
+			refreshSubscriptions()
+			return nil, nil
+		})
+	}()
 
 	// Periodic refresh
 	ticker := time.NewTicker(refreshInterval)
 	go func() {
 		for range ticker.C {
-			refreshSubscriptions()
+			refreshSF.Do("refresh", func() (interface{}, error) {
+				refreshSubscriptions()
+				return nil, nil
+			})
 		}
 	}()
 
@@ -113,12 +123,6 @@ func envOr(key, fallback string) string {
 }
 
 func refreshSubscriptions() {
-	if refreshing {
-		return
-	}
-	refreshing = true
-	defer func() { refreshing = false }()
-
 	start := time.Now()
 	log.Printf("[refresh] starting...")
 
@@ -268,7 +272,10 @@ func refreshSubscriptions() {
 
 func handleSub(w http.ResponseWriter, r *http.Request) {
 	if cachedOutput == "" {
-		refreshSubscriptions()
+		refreshSF.Do("refresh", func() (interface{}, error) {
+			refreshSubscriptions()
+			return nil, nil
+		})
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

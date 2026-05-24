@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/miekg/dns v1.1.72
 	github.com/xtls/xray-core v1.260327.0
+	golang.org/x/sync v0.20.0
 )
 
 require (
@@ -31,7 +32,6 @@ require (
 	golang.org/x/exp v0.0.0-20240531132922-fd00a4e0eefc // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.12.0 // indirect

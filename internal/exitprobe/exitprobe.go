@@ -20,6 +20,7 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
+	"golang.org/x/sync/errgroup"
 )
 
 type ExitProbeResult struct {
@@ -98,19 +99,26 @@ func (ep *ExitProber) Stop() {
 
 func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord) map[int]*ExitProbeResult {
 	results := make(map[int]*ExitProbeResult, len(records))
-	sem := make(chan struct{}, ep.cfg.MaxConcurrent)
-	var wg sync.WaitGroup
+	var mu sync.Mutex
+	maxConcurrent := ep.cfg.MaxConcurrent
+	if len(records) < maxConcurrent {
+		maxConcurrent = len(records)
+	}
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrent)
 
 	for i, rec := range records {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(idx int, record parse.ProxyRecord) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			results[idx] = ep.probeSingle(ctx, idx, record)
-		}(i, rec)
+		i, rec := i, rec
+		g.Go(func() error {
+			result := ep.probeSingle(ctx, i, rec)
+			mu.Lock()
+			results[i] = result
+			mu.Unlock()
+			return nil
+		})
 	}
-	wg.Wait()
+	g.Wait()
 
 	// Batch geo lookup for all successful exit IPs
 	ep.batchGeoLookup(results)

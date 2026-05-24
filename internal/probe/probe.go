@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type ProbeResult struct {
@@ -23,33 +25,30 @@ type HostSpec struct {
 func TCPProbeAll(ctx context.Context, hosts []HostSpec, maxConcurrent int, timeout time.Duration) map[string]*ProbeResult {
 	results := make(map[string]*ProbeResult, len(hosts))
 	var mu sync.Mutex
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrent)
 
 	for _, h := range hosts {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(host, ip string, port int) {
-			defer wg.Done()
-			defer func() { <-sem }()
+		h := h
+		g.Go(func() error {
 			select {
 			case <-ctx.Done():
-				return
+				return nil
 			default:
 			}
-			key := fmt.Sprintf("%s:%d", host, port)
-			target := ip
+			key := fmt.Sprintf("%s:%d", h.Host, h.Port)
+			target := h.IP
 			if target == "" {
-				target = host
+				target = h.Host
 			}
-			result := tcpProbe(ctx, target, port, timeout)
+			result := tcpProbe(ctx, target, h.Port, timeout)
 			mu.Lock()
 			results[key] = result
 			mu.Unlock()
-		}(h.Host, h.IP, h.Port)
+			return nil
+		})
 	}
-
-	wg.Wait()
+	g.Wait()
 	return results
 }
 
