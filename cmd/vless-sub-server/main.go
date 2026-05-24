@@ -99,7 +99,7 @@ func loadConfig() *config.Config {
 	if d, err := time.ParseDuration(envOr("EXIT_PROBE_TIMEOUT", "12s")); err == nil {
 		c.ExitProbeTimeout = d
 	}
-	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "10"))
+	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "50"))
 	c.SocksStartPort, _ = strconv.Atoi(envOr("SOCKS_START_PORT", "10801"))
 	c.GeoDatDir = envOr("GEO_DAT_DIR", "/usr/local/share/xray")
 	return c
