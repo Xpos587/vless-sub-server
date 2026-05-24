@@ -13,15 +13,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Stage 2: Download Xray geo dat files
 FROM docker.io/library/alpine:3.21 AS geo-builder
 ARG XRAY_VERSION=26.2.6
-RUN apk add --no-cache curl unzip
-RUN mkdir -p /tmp/geo && \
+RUN --mount=type=cache,target=/etc/apk/cache \
+    apk add --no-cache curl unzip && \
+    mkdir -p /tmp/geo && \
     curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip" \
     -o /tmp/xray.zip && \
     unzip -o /tmp/xray.zip -d /tmp/geo geosite.dat geoip.dat && \
     rm /tmp/xray.zip
 
-# Stage 3: Runtime (distroless)
-FROM gcr.io/distroless/static-debian12:nonroot
+# Stage 3: Runtime (scratch — zero OS overhead)
+FROM scratch
 COPY --from=builder /app/vless-sub-server /usr/local/bin/vless-sub-server
 COPY --from=geo-builder /tmp/geo/geosite.dat /usr/local/share/xray/geosite.dat
 COPY --from=geo-builder /tmp/geo/geoip.dat /usr/local/share/xray/geoip.dat
@@ -30,6 +31,9 @@ ENV PORT=8080
 ENV REFRESH_INTERVAL=30m
 ENV GEO_DAT_DIR=/usr/local/share/xray
 ENV SOCKS_START_PORT=10801
+ENV MAX_CONCURRENT=50
+ENV DNS_CACHE_TTL=10m
 
 EXPOSE 8080
+USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/vless-sub-server"]

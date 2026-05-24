@@ -1,0 +1,9 @@
+.git
+.gitignore
+.claude
+docs
+*.md
+CLAUDE.md
+.env
+.env.*
+*.log
