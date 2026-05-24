@@ -1,0 +1,10 @@
+{
+  "name": "vless-sub-server",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/server.ts",
+    "build": "bun build src/server.ts --compile --outfile dist/vless-sub-server",
+    "start": "bun run src/server.ts"
+  }
+}
