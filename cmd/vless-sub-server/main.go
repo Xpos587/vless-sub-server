@@ -31,10 +31,12 @@ var (
 	lastRefresh  time.Time
 	refreshSF    singleflight.Group
 	cfg          *config.Config
+	dnsCache     *dns.DNSCache
 )
 
 func main() {
 	cfg = loadConfig()
+	dnsCache = dns.NewDNSCache(cfg.DNSCacheTTL)
 
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
@@ -107,6 +109,9 @@ func loadConfig() *config.Config {
 	if d, err := time.ParseDuration(envOr("DNS_TIMEOUT", "2s")); err == nil {
 		c.DNSTimeout = d
 	}
+	if d, err := time.ParseDuration(envOr("DNS_CACHE_TTL", "10m")); err == nil {
+		c.DNSCacheTTL = d
+	}
 	if d, err := time.ParseDuration(envOr("EXIT_PROBE_TIMEOUT", "12s")); err == nil {
 		c.ExitProbeTimeout = d
 	}
@@ -151,7 +156,7 @@ func refreshSubscriptions() {
 	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
 
 	// Phase 3+4: DNS resolve + TCP probe (via pipeline package)
-	result := pipeline.ProbeAndFilterStream(ctx, filtered, 20, cfg.DNSTimeout, cfg.TCPTimeout)
+	result := pipeline.ProbeAndFilterStream(ctx, filtered, 20, cfg.DNSTimeout, cfg.TCPTimeout, dnsCache)
 	aliveProxies := result.Alive
 
 	// Reconstruct dnsMap from pipeline results (needed for geo isLAN checks)
@@ -244,6 +249,7 @@ func refreshSubscriptions() {
 
 	cachedOutput = output
 	lastRefresh = time.Now()
+	dnsCache.Purge()
 	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
 }
 

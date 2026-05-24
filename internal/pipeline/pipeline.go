@@ -36,9 +36,9 @@ type ProbeAndFilterResult struct {
 // ProbeAndFilter resolves DNS for all records, TCP-probes the ones that
 // resolved, and returns only the alive proxies along with the total
 // count of records that had DNS results.
-func ProbeAndFilter(ctx context.Context, records []parse.ProxyRecord, maxConcurrent int, dnsTimeout, tcpTimeout time.Duration) ProbeAndFilterResult {
+func ProbeAndFilter(ctx context.Context, records []parse.ProxyRecord, maxConcurrent int, dnsTimeout, tcpTimeout time.Duration, cache *dns.DNSCache) ProbeAndFilterResult {
 	uniqueHosts := dedupHosts(records)
-	dnsMap := dns.ResolveHosts(ctx, uniqueHosts, maxConcurrent, dnsTimeout)
+	dnsMap := dns.ResolveHosts(ctx, uniqueHosts, maxConcurrent, dnsTimeout, cache)
 
 	var withDNS []ResolvedProxy
 	for _, r := range records {
@@ -82,7 +82,7 @@ func ProbeAndFilter(ctx context.Context, records []parse.ProxyRecord, maxConcurr
 // ProbeAndFilterStream resolves DNS and TCP-probes with streaming overlap:
 // TCP probing begins as soon as the first DNS result arrives, rather than
 // waiting for all DNS resolutions to complete.
-func ProbeAndFilterStream(ctx context.Context, records []parse.ProxyRecord, maxConcurrent int, dnsTimeout, tcpTimeout time.Duration) ProbeAndFilterResult {
+func ProbeAndFilterStream(ctx context.Context, records []parse.ProxyRecord, maxConcurrent int, dnsTimeout, tcpTimeout time.Duration, cache *dns.DNSCache) ProbeAndFilterResult {
 	uniqueHosts := dedupHosts(records)
 
 	// Build host -> records index for fast lookup
@@ -92,7 +92,7 @@ func ProbeAndFilterStream(ctx context.Context, records []parse.ProxyRecord, maxC
 	}
 
 	// Stage 1: Stream DNS results as they arrive
-	dnsCh := dns.ResolveStream(ctx, uniqueHosts, maxConcurrent, dnsTimeout)
+	dnsCh := dns.ResolveStream(ctx, uniqueHosts, maxConcurrent, dnsTimeout, cache)
 
 	// Stage 2: TCP probe each DNS result as it arrives (overlapping)
 	type probedResult struct {
