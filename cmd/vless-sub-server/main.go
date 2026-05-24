@@ -124,6 +124,7 @@ func loadConfig() *config.Config {
 	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "50"))
 	c.SocksStartPort, _ = strconv.Atoi(envOr("SOCKS_START_PORT", "10801"))
 	c.GeoDatDir = envOr("GEO_DAT_DIR", "/usr/local/share/xray")
+	c.Hwid = envOr("HWID", "cb46d5c2545131323baa5a7d67cb05c6")
 	return c
 }
 
