@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
@@ -19,6 +21,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/format"
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
+	"github.com/michael/vless-sub-server/internal/pipeline"
 	"github.com/michael/vless-sub-server/internal/probe"
 	"github.com/michael/vless-sub-server/internal/rename"
 )
@@ -26,12 +29,14 @@ import (
 var (
 	cachedOutput string
 	lastRefresh  time.Time
-	refreshing   bool
+	refreshSF    singleflight.Group
 	cfg          *config.Config
+	dnsCache     *dns.DNSCache
 )
 
 func main() {
 	cfg = loadConfig()
+	dnsCache = dns.NewDNSCache(cfg.DNSCacheTTL)
 
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
@@ -42,13 +47,21 @@ func main() {
 	log.Printf("[server] starting on :%d, refresh every %s", port, refreshInterval)
 
 	// Initial refresh
-	go refreshSubscriptions()
+	go func() {
+		refreshSF.Do("refresh", func() (interface{}, error) {
+			refreshSubscriptions()
+			return nil, nil
+		})
+	}()
 
 	// Periodic refresh
 	ticker := time.NewTicker(refreshInterval)
 	go func() {
 		for range ticker.C {
-			refreshSubscriptions()
+			refreshSF.Do("refresh", func() (interface{}, error) {
+				refreshSubscriptions()
+				return nil, nil
+			})
 		}
 	}()
 
@@ -86,8 +99,11 @@ func loadConfig() *config.Config {
 	} else {
 		c.RefreshInterval = 30 * time.Minute
 	}
-	c.SubscriptionURLs = strings.Split(envOr("SUBSCRIPTION_URLS",
-		"https://nya.astracat.ru/krQYNf60nkoe-43K,https://sub.volnalink.uk/W5VYy08Uu9T30aTE"), ",")
+	if v := os.Getenv("SUBSCRIPTION_URLS"); v != "" {
+		c.SubscriptionURLs = strings.Split(v, ",")
+	} else {
+		log.Fatal("[config] SUBSCRIPTION_URLS is required")
+	}
 	c.NameInclude = envOr("NAME_INCLUDE", "")
 	c.NameExclude = envOr("NAME_EXCLUDE", "")
 	if d, err := time.ParseDuration(envOr("TCP_TIMEOUT", "3s")); err == nil {
@@ -95,6 +111,9 @@ func loadConfig() *config.Config {
 	}
 	if d, err := time.ParseDuration(envOr("DNS_TIMEOUT", "2s")); err == nil {
 		c.DNSTimeout = d
+	}
+	if d, err := time.ParseDuration(envOr("DNS_CACHE_TTL", "10m")); err == nil {
+		c.DNSCacheTTL = d
 	}
 	if d, err := time.ParseDuration(envOr("EXIT_PROBE_TIMEOUT", "12s")); err == nil {
 		c.ExitProbeTimeout = d
@@ -113,12 +132,6 @@ func envOr(key, fallback string) string {
 }
 
 func refreshSubscriptions() {
-	if refreshing {
-		return
-	}
-	refreshing = true
-	defer func() { refreshing = false }()
-
 	start := time.Now()
 	log.Printf("[refresh] starting...")
 
@@ -126,7 +139,7 @@ func refreshSubscriptions() {
 	defer cancel()
 
 	// Phase 1: Fetch subscriptions
-	fetchResults := fetch.FetchSubscriptions(cfg.SubscriptionURLs, 8*time.Second)
+	fetchResults := fetch.FetchSubscriptions(ctx, cfg.SubscriptionURLs, 8*time.Second)
 	sourcesOK := 0
 	sourcesFailed := 0
 	for _, r := range fetchResults {
@@ -145,42 +158,28 @@ func refreshSubscriptions() {
 	parseResult := parse.ParseAllLines(allLines)
 	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
 
-	// Phase 3: DNS
-	uniqueHosts := make(map[string]bool)
-	for _, r := range filtered {
-		uniqueHosts[r.Host] = true
-	}
-	hostList := make([]string, 0, len(uniqueHosts))
-	for h := range uniqueHosts {
-		hostList = append(hostList, h)
-	}
-	dnsMap := dns.ResolveHosts(hostList, 20, cfg.DNSTimeout)
+	// Phase 3+4: DNS resolve + TCP probe (via pipeline package)
+	result := pipeline.ProbeAndFilterStream(ctx, filtered, 20, cfg.DNSTimeout, cfg.TCPTimeout, dnsCache)
+	aliveProxies := result.Alive
 
-	var withDNS []parse.ProxyRecord
-	for _, r := range filtered {
-		if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-			withDNS = append(withDNS, r)
+	// Reconstruct dnsMap from pipeline results (needed for geo isLAN checks)
+	dnsMap := make(map[string]*dns.DNSResult)
+	for _, p := range aliveProxies {
+		if p.DNS != nil {
+			dnsMap[p.Record.Host] = p.DNS
 		}
 	}
 
-	// Phase 4: TCP probes
-	probeHosts := make([]struct{ Host, IP string; Port int }, len(withDNS))
-	for i, r := range withDNS {
-		probeHosts[i] = struct{ Host, IP string; Port int }{
-			Host: r.Host,
-			IP:   dnsMap[r.Host].IP,
-			Port: r.Port,
-		}
+	// Reconstruct probeResults for rename.RenameAll
+	probeResults := make(map[string]*probe.ProbeResult)
+	for _, p := range aliveProxies {
+		key := fmt.Sprintf("%s:%d", p.Record.Host, p.Record.Port)
+		probeResults[key] = p.Probe
 	}
-	probeResults := probe.TCPProbeAll(probeHosts, 20, cfg.TCPTimeout)
 
-	// Collect alive proxies
 	var aliveRecords []parse.ProxyRecord
-	for _, r := range withDNS {
-		key := fmt.Sprintf("%s:%d", r.Host, r.Port)
-		if p, ok := probeResults[key]; ok && p.Reachable {
-			aliveRecords = append(aliveRecords, r)
-		}
+	for _, p := range aliveProxies {
+		aliveRecords = append(aliveRecords, p.Record)
 	}
 
 	// Phase 5: Exit-IP probe via Xray
@@ -195,13 +194,12 @@ func refreshSubscriptions() {
 		ep := exitprobe.NewExitProber(cfg)
 		if err := ep.StartWithProxies(aliveRecords); err != nil {
 			log.Printf("[refresh] xray start failed: %v, proceeding without exit-IP geo", err)
-			for _, r := range aliveRecords {
-				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
+			for _, p := range aliveProxies {
 				geoRecords = append(geoRecords, struct {
 					Record parse.ProxyRecord
 					Geo    *geo.GeoInfo
 					IsLAN  bool
-				}{r, nil, isLAN})
+				}{p.Record, nil, p.IsLAN})
 			}
 		} else {
 			exitResults := ep.ProbeAll(ctx, aliveRecords)
@@ -231,44 +229,39 @@ func refreshSubscriptions() {
 				}{r, geoInfo, isLAN})
 			}
 		}
-	} else {
-		for _, r := range withDNS {
-			isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
-			geoRecords = append(geoRecords, struct {
-				Record parse.ProxyRecord
-				Geo    *geo.GeoInfo
-				IsLAN  bool
-			}{r, nil, isLAN})
-		}
 	}
 
 	// Phase 6: Rename
 	renamed := rename.RenameAll(geoRecords, probeResults)
 
 	totalAlive := len(renamed)
-	totalDead := len(withDNS) - totalAlive
+	totalDead := result.DNSResolved - totalAlive
 
 	output := format.FormatOutput(renamed, format.FormatMetadata{
-		TotalFetched:   len(allLines),
-		TotalParsed:    len(filtered),
-		TotalSkipped:   parseResult.Skipped,
-		TotalDuplicates: parseResult.Duplicates,
-		TotalAlive:     totalAlive,
-		TotalDead:      totalDead,
-		SourcesOK:      sourcesOK,
-		SourcesFailed:  sourcesFailed,
-		GeoAvailable:   geoAvailable,
-		GeoTotal:       len(withDNS),
+		TotalFetched:    len(allLines),
+		TotalParsed:     len(filtered),
+		TotalSkipped:    parseResult.Skipped,
+		TotalDuplicates:  parseResult.Duplicates,
+		TotalAlive:      totalAlive,
+		TotalDead:       totalDead,
+		SourcesOK:       sourcesOK,
+		SourcesFailed:   sourcesFailed,
+		GeoAvailable:    geoAvailable,
+		GeoTotal:        result.DNSResolved,
 	})
 
 	cachedOutput = output
 	lastRefresh = time.Now()
+	dnsCache.Purge()
 	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
 }
 
 func handleSub(w http.ResponseWriter, r *http.Request) {
 	if cachedOutput == "" {
-		refreshSubscriptions()
+		refreshSF.Do("refresh", func() (interface{}, error) {
+			refreshSubscriptions()
+			return nil, nil
+		})
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

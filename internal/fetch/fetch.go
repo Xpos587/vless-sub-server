@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,7 +12,14 @@ import (
 	"time"
 
 	"github.com/michael/vless-sub-server/internal/config"
+	"golang.org/x/sync/errgroup"
 )
+
+var fetchTransport = &http.Transport{
+	MaxIdleConns:        10,
+	MaxIdleConnsPerHost: 5,
+	IdleConnTimeout:     30 * time.Second,
+}
 
 type FetchResult struct {
 	URL    string
@@ -20,30 +28,25 @@ type FetchResult struct {
 	Error  string
 }
 
-func FetchSubscriptions(urls []string, timeout time.Duration) []FetchResult {
+func FetchSubscriptions(ctx context.Context, urls []string, timeout time.Duration) []FetchResult {
 	results := make([]FetchResult, len(urls))
-	type idxResult struct {
-		idx int
-		res FetchResult
-	}
-	ch := make(chan idxResult, len(urls))
+	g, _ := errgroup.WithContext(ctx)
+	g.SetLimit(len(urls)) // all URLs in parallel — typically 2-5
 
 	for i, u := range urls {
-		go func(idx int, url string) {
-			ch <- idxResult{idx, fetchSingle(url, timeout)}
-		}(i, u)
+		i, u := i, u
+		g.Go(func() error {
+			results[i] = fetchSingle(ctx, u, timeout)
+			return nil // best-effort: collect all results regardless
+		})
 	}
-
-	for range urls {
-		r := <-ch
-		results[r.idx] = r.res
-	}
+	g.Wait()
 	return results
 }
 
-func fetchSingle(url string, timeout time.Duration) FetchResult {
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequest("GET", url, nil)
+func fetchSingle(ctx context.Context, url string, timeout time.Duration) FetchResult {
+	client := &http.Client{Timeout: timeout, Transport: fetchTransport}
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return FetchResult{URL: url, Status: "error", Error: err.Error()}
 	}

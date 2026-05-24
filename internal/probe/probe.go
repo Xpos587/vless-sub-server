@@ -1,10 +1,13 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type ProbeResult struct {
@@ -13,38 +16,47 @@ type ProbeResult struct {
 	FailureType string // "refused", "timeout", "error"
 }
 
-func TCPProbeAll(hosts []struct{ Host, IP string; Port int }, maxConcurrent int, timeout time.Duration) map[string]*ProbeResult {
+type HostSpec struct {
+	Host string
+	IP   string
+	Port int
+}
+
+func TCPProbeAll(ctx context.Context, hosts []HostSpec, maxConcurrent int, timeout time.Duration) map[string]*ProbeResult {
 	results := make(map[string]*ProbeResult, len(hosts))
 	var mu sync.Mutex
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrent)
 
 	for _, h := range hosts {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(host, ip string, port int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			key := fmt.Sprintf("%s:%d", host, port)
-			target := ip
-			if target == "" {
-				target = host
+		h := h
+		g.Go(func() error {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
 			}
-			result := tcpProbe(target, port, timeout)
+			key := fmt.Sprintf("%s:%d", h.Host, h.Port)
+			target := h.IP
+			if target == "" {
+				target = h.Host
+			}
+			result := tcpProbe(ctx, target, h.Port, timeout)
 			mu.Lock()
 			results[key] = result
 			mu.Unlock()
-		}(h.Host, h.IP, h.Port)
+			return nil
+		})
 	}
-
-	wg.Wait()
+	g.Wait()
 	return results
 }
 
-func tcpProbe(host string, port int, timeout time.Duration) *ProbeResult {
+func tcpProbe(ctx context.Context, host string, port int, timeout time.Duration) *ProbeResult {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	d := net.Dialer{Timeout: timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		ft := "error"
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -56,4 +68,14 @@ func tcpProbe(host string, port int, timeout time.Duration) *ProbeResult {
 	}
 	conn.Close()
 	return &ProbeResult{Reachable: true, LatencyMs: time.Since(start).Milliseconds()}
+}
+
+// TCPProbeSingle probes a single host:port and returns the result.
+func TCPProbeSingle(ctx context.Context, ip string, port int, timeout time.Duration) *ProbeResult {
+	select {
+	case <-ctx.Done():
+		return &ProbeResult{Reachable: false, FailureType: "canceled"}
+	default:
+	}
+	return tcpProbe(ctx, ip, port, timeout)
 }

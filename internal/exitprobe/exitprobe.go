@@ -20,6 +20,7 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
+	"golang.org/x/sync/errgroup"
 )
 
 type ExitProbeResult struct {
@@ -33,13 +34,22 @@ type ExitProber struct {
 	cfg        *config.Config
 	instance   *core.Instance
 	socksPorts map[int]int // proxy index -> socks port
+	transport  *http.Transport
 	mu         sync.Mutex
 }
 
 func NewExitProber(cfg *config.Config) *ExitProber {
 	return &ExitProber{
-		cfg:        cfg,
+		cfg: cfg,
 		socksPorts: make(map[int]int),
+		transport: &http.Transport{
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   20,
+			IdleConnTimeout:       90 * time.Second,
+			DialContext:           (&net.Dialer{Timeout: cfg.ExitProbeTimeout, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   cfg.ExitProbeTimeout,
+			ResponseHeaderTimeout:  cfg.ExitProbeTimeout,
+		},
 	}
 }
 
@@ -89,19 +99,26 @@ func (ep *ExitProber) Stop() {
 
 func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord) map[int]*ExitProbeResult {
 	results := make(map[int]*ExitProbeResult, len(records))
-	sem := make(chan struct{}, ep.cfg.MaxConcurrent)
-	var wg sync.WaitGroup
+	var mu sync.Mutex
+	maxConcurrent := ep.cfg.MaxConcurrent
+	if len(records) < maxConcurrent {
+		maxConcurrent = len(records)
+	}
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrent)
 
 	for i, rec := range records {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(idx int, record parse.ProxyRecord) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			results[idx] = ep.probeSingle(ctx, idx, record)
-		}(i, rec)
+		i, rec := i, rec
+		g.Go(func() error {
+			result := ep.probeSingle(ctx, i, rec)
+			mu.Lock()
+			results[i] = result
+			mu.Unlock()
+			return nil
+		})
 	}
-	wg.Wait()
+	g.Wait()
 
 	// Batch geo lookup for all successful exit IPs
 	ep.batchGeoLookup(results)
@@ -109,20 +126,22 @@ func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord)
 }
 
 func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.ProxyRecord) *ExitProbeResult {
+	select {
+	case <-ctx.Done():
+		return &ExitProbeResult{XrayOK: false}
+	default:
+	}
+
 	port, ok := ep.socksPorts[idx]
 	if !ok {
 		return &ExitProbeResult{XrayOK: false}
 	}
 
 	proxyURL, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", port))
+	transport := ep.transport.Clone()
+	transport.Proxy = http.ProxyURL(proxyURL)
 	client := &http.Client{
-		Timeout: ep.cfg.ExitProbeTimeout,
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyURL(proxyURL),
-			DialContext:           (&net.Dialer{Timeout: ep.cfg.ExitProbeTimeout}).DialContext,
-			TLSHandshakeTimeout:  ep.cfg.ExitProbeTimeout,
-			ResponseHeaderTimeout: ep.cfg.ExitProbeTimeout,
-		},
+		Transport: transport,
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://ipwho.is/", nil)
@@ -145,7 +164,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	var ipResp geo.IPWhoisResponse
 	if err := json.Unmarshal(body, &ipResp); err != nil || !ipResp.Success {
 		// Try CF trace as fallback
-		return ep.probeCFTrace(ctx, client)
+		return ep.probeCFTrace(ctx, transport)
 	}
 
 	return &ExitProbeResult{
@@ -161,7 +180,9 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	}
 }
 
-func (ep *ExitProber) probeCFTrace(ctx context.Context, client *http.Client) *ExitProbeResult {
+func (ep *ExitProber) probeCFTrace(ctx context.Context, transport *http.Transport) *ExitProbeResult {
+	client := &http.Client{Transport: transport}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://speed.cloudflare.com/cdn-cgi/trace", nil)
 	if err != nil {
 		return &ExitProbeResult{XrayOK: false}
