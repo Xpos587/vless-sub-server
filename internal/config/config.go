@@ -27,7 +27,6 @@ var CustomHeaders = map[string]string{
 	"X-Hwid":          "", // populated at runtime from Config.Hwid
 	"X-Ver-Os":        "artix_unknown",
 	"Accept-Language":  "en,*",
-	"Accept-Encoding":  "identity",
 }
 
 var PlaceholderHosts = map[string]bool{

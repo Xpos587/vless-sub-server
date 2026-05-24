@@ -10,11 +10,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/vless-sub-server ./cmd/vless-sub-server
 
-# Stage 2: Download Xray geo dat files
+# Stage 2: Download Xray geo dat files + CA certs
 FROM docker.io/library/alpine:3.21 AS geo-builder
 ARG XRAY_VERSION=26.2.6
 RUN --mount=type=cache,target=/etc/apk/cache \
-    apk add --no-cache curl unzip && \
+    apk add --no-cache curl unzip ca-certificates && \
     mkdir -p /tmp/geo && \
     curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip" \
     -o /tmp/xray.zip && \
@@ -26,6 +26,7 @@ FROM scratch
 COPY --from=builder /app/vless-sub-server /usr/local/bin/vless-sub-server
 COPY --from=geo-builder /tmp/geo/geosite.dat /usr/local/share/xray/geosite.dat
 COPY --from=geo-builder /tmp/geo/geoip.dat /usr/local/share/xray/geoip.dat
+COPY --from=geo-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 ENV PORT=8080
 # SUBSCRIPTION_URLS is required — set at runtime: docker run -e SUBSCRIPTION_URLS=https://...

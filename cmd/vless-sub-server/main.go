@@ -69,7 +69,7 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/sub", handleSub)
+	mux.HandleFunc("/", handleSub)
 	mux.HandleFunc("/health", handleHealth)
 
 	server := &http.Server{

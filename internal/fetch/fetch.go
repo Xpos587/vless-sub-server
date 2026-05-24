@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -56,23 +57,28 @@ func fetchSingle(ctx context.Context, url string, timeout time.Duration) FetchRe
 
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[fetch] %s: %v", url, err)
 		return FetchResult{URL: url, Status: "error", Error: err.Error()}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		log.Printf("[fetch] %s: HTTP %d", url, resp.StatusCode)
 		return FetchResult{URL: url, Status: "error", Error: fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Printf("[fetch] %s: read body: %v", url, err)
 		return FetchResult{URL: url, Status: "error", Error: err.Error()}
 	}
 
 	lines := decodeSubscription(string(body))
 	if len(lines) == 0 {
+		log.Printf("[fetch] %s: empty response (body=%d bytes)", url, len(body))
 		return FetchResult{URL: url, Status: "error", Error: "empty response"}
 	}
+	log.Printf("[fetch] %s: ok, %d lines", url, len(lines))
 	return FetchResult{URL: url, Status: "ok", Lines: lines}
 }
 
@@ -404,6 +410,8 @@ func extractSingboxURLs(data json.RawMessage) []string {
 			}
 			if u := singboxOutboundToUrl(proto, settings, stream, remark); u != "" {
 				urls = append(urls, u)
+			} else {
+				log.Printf("[fetch] singbox: skipped %s/%s (empty URL)", proto, tag)
 			}
 		}
 	}
