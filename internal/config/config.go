@@ -11,7 +11,7 @@ type Config struct {
 	TCPTimeout       time.Duration `env:"TCP_TIMEOUT" envDefault:"3s"`
 	DNSTimeout       time.Duration `env:"DNS_TIMEOUT" envDefault:"2s"`
 	ExitProbeTimeout time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
-	MaxConcurrent    int           `env:"MAX_CONCURRENT" envDefault:"10"`
+	MaxConcurrent    int           `env:"MAX_CONCURRENT" envDefault:"50"`
 	SocksStartPort   int           `env:"SOCKS_START_PORT" envDefault:"10801"`
 	GeoDatDir        string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
 }
