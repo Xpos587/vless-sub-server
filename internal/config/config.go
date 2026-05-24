@@ -5,7 +5,7 @@ import "time"
 type Config struct {
 	Port             int           `env:"PORT" envDefault:"8080"`
 	RefreshInterval  time.Duration `env:"REFRESH_INTERVAL" envDefault:"30m"`
-	SubscriptionURLs []string      `env:"SUBSCRIPTION_URLS" envSeparator:"," envDefault:"https://nya.astracat.ru/krQYNf60nkoe-43K,https://sub.volnalink.uk/W5VYy08Uu9T30aTE"`
+	SubscriptionURLs []string      `env:"SUBSCRIPTION_URLS,required" envSeparator:","`
 	NameInclude      string        `env:"NAME_INCLUDE"`
 	NameExclude      string        `env:"NAME_EXCLUDE"`
 	TCPTimeout       time.Duration `env:"TCP_TIMEOUT" envDefault:"3s"`

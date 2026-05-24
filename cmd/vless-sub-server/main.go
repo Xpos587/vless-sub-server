@@ -99,8 +99,11 @@ func loadConfig() *config.Config {
 	} else {
 		c.RefreshInterval = 30 * time.Minute
 	}
-	c.SubscriptionURLs = strings.Split(envOr("SUBSCRIPTION_URLS",
-		"https://nya.astracat.ru/krQYNf60nkoe-43K,https://sub.volnalink.uk/W5VYy08Uu9T30aTE"), ",")
+	if v := os.Getenv("SUBSCRIPTION_URLS"); v != "" {
+		c.SubscriptionURLs = strings.Split(v, ",")
+	} else {
+		log.Fatal("[config] SUBSCRIPTION_URLS is required")
+	}
 	c.NameInclude = envOr("NAME_INCLUDE", "")
 	c.NameExclude = envOr("NAME_EXCLUDE", "")
 	if d, err := time.ParseDuration(envOr("TCP_TIMEOUT", "3s")); err == nil {

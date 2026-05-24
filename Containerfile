@@ -28,6 +28,7 @@ COPY --from=geo-builder /tmp/geo/geosite.dat /usr/local/share/xray/geosite.dat
 COPY --from=geo-builder /tmp/geo/geoip.dat /usr/local/share/xray/geoip.dat
 
 ENV PORT=8080
+# SUBSCRIPTION_URLS is required — set at runtime: docker run -e SUBSCRIPTION_URLS=https://...
 ENV REFRESH_INTERVAL=30m
 ENV GEO_DAT_DIR=/usr/local/share/xray
 ENV SOCKS_START_PORT=10801
