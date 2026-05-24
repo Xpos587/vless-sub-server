@@ -15,6 +15,7 @@ type Config struct {
 	MaxConcurrent    int           `env:"MAX_CONCURRENT" envDefault:"50"`
 	SocksStartPort   int           `env:"SOCKS_START_PORT" envDefault:"10801"`
 	GeoDatDir        string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
+	Hwid             string        `env:"HWID" envDefault:"cb46d5c2545131323baa5a7d67cb05c6"`
 }
 
 var CustomHeaders = map[string]string{
@@ -23,7 +24,7 @@ var CustomHeaders = map[string]string{
 	"X-Device-Locale": "EN",
 	"X-Device-Os":     "Linux",
 	"X-Device-Model":  "m7600qe_x86_64",
-	"X-Hwid":          "cb46d5c2545131323baa5a7d67cb05c6",
+	"X-Hwid":          "", // populated at runtime from Config.Hwid
 	"X-Ver-Os":        "artix_unknown",
 	"Accept-Language":  "en,*",
 	"Accept-Encoding":  "identity",

@@ -41,6 +41,9 @@ func main() {
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
 
+	// Apply HWID from env into custom headers
+	config.CustomHeaders["X-Hwid"] = cfg.Hwid
+
 	port := cfg.Port
 	refreshInterval := cfg.RefreshInterval
 
