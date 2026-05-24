@@ -33,13 +33,22 @@ type ExitProber struct {
 	cfg        *config.Config
 	instance   *core.Instance
 	socksPorts map[int]int // proxy index -> socks port
+	transport  *http.Transport
 	mu         sync.Mutex
 }
 
 func NewExitProber(cfg *config.Config) *ExitProber {
 	return &ExitProber{
-		cfg:        cfg,
+		cfg: cfg,
 		socksPorts: make(map[int]int),
+		transport: &http.Transport{
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   20,
+			IdleConnTimeout:       90 * time.Second,
+			DialContext:           (&net.Dialer{Timeout: cfg.ExitProbeTimeout, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   cfg.ExitProbeTimeout,
+			ResponseHeaderTimeout:  cfg.ExitProbeTimeout,
+		},
 	}
 }
 
@@ -121,14 +130,10 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	}
 
 	proxyURL, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", port))
+	transport := ep.transport.Clone()
+	transport.Proxy = http.ProxyURL(proxyURL)
 	client := &http.Client{
-		Timeout: ep.cfg.ExitProbeTimeout,
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyURL(proxyURL),
-			DialContext:           (&net.Dialer{Timeout: ep.cfg.ExitProbeTimeout}).DialContext,
-			TLSHandshakeTimeout:  ep.cfg.ExitProbeTimeout,
-			ResponseHeaderTimeout: ep.cfg.ExitProbeTimeout,
-		},
+		Transport: transport,
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://ipwho.is/", nil)
@@ -151,7 +156,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	var ipResp geo.IPWhoisResponse
 	if err := json.Unmarshal(body, &ipResp); err != nil || !ipResp.Success {
 		// Try CF trace as fallback
-		return ep.probeCFTrace(ctx, client)
+		return ep.probeCFTrace(ctx, transport)
 	}
 
 	return &ExitProbeResult{
@@ -167,7 +172,9 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	}
 }
 
-func (ep *ExitProber) probeCFTrace(ctx context.Context, client *http.Client) *ExitProbeResult {
+func (ep *ExitProber) probeCFTrace(ctx context.Context, transport *http.Transport) *ExitProbeResult {
+	client := &http.Client{Transport: transport}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://speed.cloudflare.com/cdn-cgi/trace", nil)
 	if err != nil {
 		return &ExitProbeResult{XrayOK: false}

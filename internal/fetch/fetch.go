@@ -14,6 +14,12 @@ import (
 	"github.com/michael/vless-sub-server/internal/config"
 )
 
+var fetchTransport = &http.Transport{
+	MaxIdleConns:        10,
+	MaxIdleConnsPerHost: 5,
+	IdleConnTimeout:     30 * time.Second,
+}
+
 type FetchResult struct {
 	URL    string
 	Status string // "ok" or "error"
@@ -43,7 +49,7 @@ func FetchSubscriptions(ctx context.Context, urls []string, timeout time.Duratio
 }
 
 func fetchSingle(ctx context.Context, url string, timeout time.Duration) FetchResult {
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{Timeout: timeout, Transport: fetchTransport}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return FetchResult{URL: url, Status: "error", Error: err.Error()}
