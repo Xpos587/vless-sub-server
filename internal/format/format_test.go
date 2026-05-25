@@ -1,6 +1,8 @@
 package format
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -74,6 +76,65 @@ func TestReconstructVlessPasswordEncoding(t *testing.T) {
 	url := reconstructVless(record, "test")
 	if strings.Contains(url, "uuid@test@") {
 		t.Fatalf("password with @ should be encoded, got %s", url)
+	}
+}
+
+func TestReconstructVMessPreservesFields(t *testing.T) {
+	record := parse.ProxyRecord{
+		Protocol:       parse.VMess,
+		Host:           "example.com",
+		Port:           443,
+		UUIDOrPassword: "uuid",
+		QueryParams: map[string]string{
+			"type":       "ws",
+			"security":   "tls",
+			"sni":        "sni.example.com",
+			"path":       "/ws",
+			"host":       "ws.example.com",
+			"flow":       "xtls-rprx-vision",
+			"scy":        "aes-128-gcm",
+			"alpn":       "h2,http/1.1",
+			"fp":         "chrome",
+			"pbk":        "pubkey",
+			"sid":        "short",
+			"spx":        "/path",
+			"headerType": "http",
+		},
+	}
+	url := reconstructVMess(record, "testnode")
+	encoded := url[len("vmess://"):]
+	encoded = strings.ReplaceAll(encoded, "-", "+")
+	encoded = strings.ReplaceAll(encoded, "_", "/")
+	for len(encoded)%4 != 0 {
+		encoded += "="
+	}
+	decoded, _ := base64.StdEncoding.DecodeString(encoded)
+	var cfg map[string]any
+	json.Unmarshal(decoded, &cfg)
+
+	if cfg["flow"] != "xtls-rprx-vision" {
+		t.Fatalf("expected flow, got %v", cfg["flow"])
+	}
+	if cfg["scy"] != "aes-128-gcm" {
+		t.Fatalf("expected scy, got %v", cfg["scy"])
+	}
+	if cfg["alpn"] != "h2,http/1.1" {
+		t.Fatalf("expected alpn, got %v", cfg["alpn"])
+	}
+	if cfg["fp"] != "chrome" {
+		t.Fatalf("expected fp, got %v", cfg["fp"])
+	}
+	if cfg["pbk"] != "pubkey" {
+		t.Fatalf("expected pbk, got %v", cfg["pbk"])
+	}
+	if cfg["sid"] != "short" {
+		t.Fatalf("expected sid, got %v", cfg["sid"])
+	}
+	if cfg["spx"] != "/path" {
+		t.Fatalf("expected spx, got %v", cfg["spx"])
+	}
+	if cfg["type"] != "http" {
+		t.Fatalf("expected type=http (headerType), got %v", cfg["type"])
 	}
 }
 

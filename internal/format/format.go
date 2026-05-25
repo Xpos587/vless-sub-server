@@ -91,19 +91,44 @@ func reconstructVMess(record parse.ProxyRecord, fragment string) string {
 		"port": record.Port,
 		"id":   record.UUIDOrPassword,
 		"net":  record.QueryParams["type"],
-		"type": record.QueryParams["type"],
+		"type": record.QueryParams["headerType"],
+		"tls":  "",
+		"sni":  record.QueryParams["sni"],
+		"path": record.QueryParams["path"],
+		"host": record.QueryParams["host"],
 	}
-	if record.QueryParams["security"] == "tls" {
+
+	if sec := record.QueryParams["security"]; sec == "tls" || sec == "reality" {
 		vmConfig["tls"] = "tls"
-	} else {
-		vmConfig["tls"] = ""
 	}
-	vmConfig["sni"] = record.QueryParams["sni"]
-	vmConfig["path"] = record.QueryParams["path"]
-	if vmConfig["path"] == "" {
-		vmConfig["path"] = "/"
+	if v := record.QueryParams["flow"]; v != "" {
+		vmConfig["flow"] = v
 	}
-	vmConfig["host"] = record.QueryParams["host"]
+	if v := record.QueryParams["scy"]; v != "" {
+		vmConfig["scy"] = v
+	}
+	if v := record.QueryParams["alpn"]; v != "" {
+		vmConfig["alpn"] = v
+	}
+	if v := record.QueryParams["fp"]; v != "" {
+		vmConfig["fp"] = v
+	}
+	if v := record.QueryParams["pbk"]; v != "" {
+		vmConfig["pbk"] = v
+	}
+	if v := record.QueryParams["sid"]; v != "" {
+		vmConfig["sid"] = v
+	}
+	if v := record.QueryParams["spx"]; v != "" {
+		vmConfig["spx"] = v
+	}
+
+	// Remove empty string fields for clean output
+	for k, v := range vmConfig {
+		if s, ok := v.(string); ok && s == "" {
+			delete(vmConfig, k)
+		}
+	}
 
 	jsonBytes, _ := json.Marshal(vmConfig)
 	encoded := base64.StdEncoding.EncodeToString(jsonBytes)
