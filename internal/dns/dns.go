@@ -105,7 +105,7 @@ func ResolveHosts(ctx context.Context, hosts []string, maxConcurrent int, timeou
 	return results
 }
 
-func resolveWithRetry(_ context.Context, host string, timeout time.Duration) (string, bool) {
+func resolveWithRetry(ctx context.Context, host string, timeout time.Duration) (string, bool) {
 	if ip := net.ParseIP(host); ip != nil {
 		if isPrivateIP(ip) {
 			return host, true
@@ -113,22 +113,26 @@ func resolveWithRetry(_ context.Context, host string, timeout time.Duration) (st
 		return host, false
 	}
 
-	if ip, ok := resolveSystem(context.Background(), host); ok {
+	if ip, ok := resolveSystem(ctx, host); ok {
 		return ip, isPrivateIPStr(ip)
 	}
 
-	if ip, ok := resolveOne(context.Background(), host, timeout); ok {
+	if ip, ok := resolveOne(ctx, host, timeout); ok {
 		return ip, isPrivateIPStr(ip)
 	}
-	time.Sleep(500 * time.Millisecond)
-	if ip, ok := resolveOne(context.Background(), host, timeout); ok {
+	select {
+	case <-ctx.Done():
+		return "", false
+	case <-time.After(200 * time.Millisecond):
+	}
+	if ip, ok := resolveOne(ctx, host, timeout); ok {
 		return ip, isPrivateIPStr(ip)
 	}
 	return "", false
 }
 
 func resolveSystem(ctx context.Context, host string) (string, bool) {
-	sysCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	sysCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	ips, err := net.DefaultResolver.LookupIPAddr(sysCtx, host)
@@ -144,7 +148,7 @@ func resolveSystem(ctx context.Context, host string) (string, bool) {
 }
 
 func resolveOne(ctx context.Context, host string, timeout time.Duration) (string, bool) {
-	resolveCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	m := new(dns.Msg)
