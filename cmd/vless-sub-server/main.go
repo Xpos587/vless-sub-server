@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,12 +25,16 @@ import (
 	"github.com/michael/vless-sub-server/internal/rename"
 )
 
+type cachedData struct {
+	output      string
+	lastRefresh time.Time
+}
+
 var (
-	cachedOutput string
-	lastRefresh  time.Time
-	refreshSF    singleflight.Group
-	cfg          *config.Config
-	dnsCache     *dns.DNSCache
+	cache     atomic.Value // stores *cachedData
+	refreshSF singleflight.Group
+	cfg       *config.Config
+	dnsCache  *dns.DNSCache
 )
 
 func main() {
@@ -117,9 +122,11 @@ func loadConfig() *config.Config {
 		c.ExitProbeTimeout = d
 	}
 	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "50"))
-	c.SocksStartPort, _ = strconv.Atoi(envOr("SOCKS_START_PORT", "10801"))
 	c.GeoDatDir = envOr("GEO_DAT_DIR", "/usr/local/share/xray")
-	c.Hwid = envOr("HWID", "cb46d5c2545131323baa5a7d67cb05c6")
+	c.Hwid = os.Getenv("HWID")
+	if c.Hwid == "" {
+		log.Fatal("[config] HWID is required")
+	}
 	return c
 }
 
@@ -271,8 +278,7 @@ func refreshSubscriptions() {
 		GeoTotal:        len(resolved),
 	})
 
-	cachedOutput = output
-	lastRefresh = time.Now()
+	cache.Store(&cachedData{output: output, lastRefresh: time.Now()})
 	dnsCache.Purge()
 	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
 }
@@ -290,16 +296,19 @@ func dedupHosts(records []parse.ProxyRecord) []string {
 }
 
 func handleSub(w http.ResponseWriter, r *http.Request) {
-	if cachedOutput == "" {
+	v := cache.Load()
+	if v == nil {
 		refreshSF.Do("refresh", func() (interface{}, error) {
 			refreshSubscriptions()
 			return nil, nil
 		})
+		v = cache.Load()
 	}
+	data := v.(*cachedData)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Last-Refresh", lastRefresh.Format(time.RFC3339))
-	w.Write([]byte(cachedOutput))
+	w.Header().Set("X-Last-Refresh", data.lastRefresh.Format(time.RFC3339))
+	w.Write([]byte(data.output))
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
