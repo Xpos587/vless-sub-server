@@ -64,7 +64,7 @@ func ParseAllLines(lines []string) ParseResult {
 			continue
 		}
 
-		key := record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol)
+		key := record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol) + ":" + record.UUIDOrPassword
 		if seen[key] {
 			duplicates++
 			continue
