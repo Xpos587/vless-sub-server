@@ -145,20 +145,41 @@ func parseVMess(line string) *ProxyRecord {
 	}
 
 	var cfg struct {
+		V             string `json:"v"`
 		Host          string `json:"add"`
-		Port          int    `json:"port"`
+		Port          any    `json:"port"`
 		ID            string `json:"id"`
 		PS            string `json:"ps"`
 		Net           string `json:"net"`
+		Type          string `json:"type"`
 		TLS           string `json:"tls"`
 		SNI           string `json:"sni"`
 		Path          string `json:"path"`
 		Host2         string `json:"host"`
 		Flow          string `json:"flow"`
+		Scy           string `json:"scy"`
+		Alpn          string `json:"alpn"`
+		FP            string `json:"fp"`
+		PBK           string `json:"pbk"`
+		SID           string `json:"sid"`
+		SPX           string `json:"spx"`
 		AllowInsecure bool   `json:"allowInsecure"`
 	}
 	if err := json.Unmarshal(decoded, &cfg); err != nil {
 		return nil
+	}
+
+	if cfg.V != "" && cfg.V != "2" {
+		return nil
+	}
+
+	// Port can be int or string
+	port := 0
+	switch p := cfg.Port.(type) {
+	case float64:
+		port = int(p)
+	case string:
+		port, _ = strconv.Atoi(p)
 	}
 
 	params := map[string]string{}
@@ -167,6 +188,8 @@ func parseVMess(line string) *ProxyRecord {
 	}
 	if cfg.TLS == "tls" {
 		params["security"] = "tls"
+	} else if cfg.TLS == "reality" {
+		params["security"] = "reality"
 	}
 	if cfg.SNI != "" {
 		params["sni"] = cfg.SNI
@@ -180,6 +203,27 @@ func parseVMess(line string) *ProxyRecord {
 	if cfg.Flow != "" {
 		params["flow"] = cfg.Flow
 	}
+	if cfg.Type != "" && cfg.Type != "none" {
+		params["headerType"] = cfg.Type
+	}
+	if cfg.Scy != "" {
+		params["scy"] = cfg.Scy
+	}
+	if cfg.Alpn != "" {
+		params["alpn"] = cfg.Alpn
+	}
+	if cfg.FP != "" {
+		params["fp"] = cfg.FP
+	}
+	if cfg.PBK != "" {
+		params["pbk"] = cfg.PBK
+	}
+	if cfg.SID != "" {
+		params["sid"] = cfg.SID
+	}
+	if cfg.SPX != "" {
+		params["spx"] = cfg.SPX
+	}
 	if cfg.AllowInsecure {
 		params["insecure"] = "1"
 	}
@@ -188,7 +232,7 @@ func parseVMess(line string) *ProxyRecord {
 	return &ProxyRecord{
 		Protocol:       VMess,
 		Host:           cfg.Host,
-		Port:           cfg.Port,
+		Port:           port,
 		UUIDOrPassword: cfg.ID,
 		QueryParams:    params,
 		Fragment:       cfg.PS,

@@ -80,3 +80,60 @@ func TestVMessNormalizeInsecure(t *testing.T) {
 		t.Fatalf("expected insecure=1 from VMess allowInsecure, got %q", record.QueryParams["insecure"])
 	}
 }
+
+func TestVMessPortAsString(t *testing.T) {
+	vmessJSON := `{"v":"2","ps":"test","add":"example.com","port":"443","id":"uuid","net":"tcp","tls":""}`
+	encoded := base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+	line := "vmess://" + encoded
+	record := parseVMess(line)
+	if record == nil {
+		t.Fatal("expected non-nil record for port as string")
+	}
+	if record.Port != 443 {
+		t.Fatalf("expected port 443, got %d", record.Port)
+	}
+}
+
+func TestVMessMissingFields(t *testing.T) {
+	vmessJSON := `{"v":"2","ps":"test","add":"example.com","port":443,"id":"uuid","net":"ws","tls":"tls","sni":"sni.example.com","path":"/ws","host":"ws.example.com","flow":"xtls-rprx-vision","scy":"aes-128-gcm","type":"http","alpn":"h2,http/1.1","fp":"chrome","pbk":"pubkey","sid":"short","spx":"/path"}`
+	encoded := base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+	line := "vmess://" + encoded
+	record := parseVMess(line)
+	if record == nil {
+		t.Fatal("expected non-nil record")
+	}
+	if record.QueryParams["scy"] != "aes-128-gcm" {
+		t.Fatalf("expected scy=aes-128-gcm, got %q", record.QueryParams["scy"])
+	}
+	if record.QueryParams["headerType"] != "http" {
+		t.Fatalf("expected headerType=http, got %q", record.QueryParams["headerType"])
+	}
+	if record.QueryParams["alpn"] != "h2,http/1.1" {
+		t.Fatalf("expected alpn=h2,http/1.1, got %q", record.QueryParams["alpn"])
+	}
+	if record.QueryParams["fp"] != "chrome" {
+		t.Fatalf("expected fp=chrome, got %q", record.QueryParams["fp"])
+	}
+	if record.QueryParams["pbk"] != "pubkey" {
+		t.Fatalf("expected pbk=pubkey, got %q", record.QueryParams["pbk"])
+	}
+	if record.QueryParams["sid"] != "short" {
+		t.Fatalf("expected sid=short, got %q", record.QueryParams["sid"])
+	}
+	if record.QueryParams["spx"] != "/path" {
+		t.Fatalf("expected spx=/path, got %q", record.QueryParams["spx"])
+	}
+	if record.QueryParams["flow"] != "xtls-rprx-vision" {
+		t.Fatalf("expected flow=xtls-rprx-vision, got %q", record.QueryParams["flow"])
+	}
+}
+
+func TestVMessV1Rejected(t *testing.T) {
+	vmessJSON := `{"v":"1","ps":"test","add":"example.com","port":443,"id":"uuid"}`
+	encoded := base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+	line := "vmess://" + encoded
+	record := parseVMess(line)
+	if record != nil {
+		t.Fatal("expected nil for VMess v1 link")
+	}
+}
