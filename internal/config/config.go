@@ -12,9 +12,8 @@ type Config struct {
 	DNSCacheTTL      time.Duration `env:"DNS_CACHE_TTL" envDefault:"10m"`
 	ExitProbeTimeout time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
 	MaxConcurrent    int           `env:"MAX_CONCURRENT" envDefault:"50"`
-	SocksStartPort   int           `env:"SOCKS_START_PORT" envDefault:"10801"`
 	GeoDatDir        string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
-	Hwid             string        `env:"HWID" envDefault:"cb46d5c2545131323baa5a7d67cb05c6"`
+	Hwid             string        `env:"HWID,required"`
 }
 
 var CustomHeaders = map[string]string{
