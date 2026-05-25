@@ -194,16 +194,25 @@ func parseTrojan(line string) *ProxyRecord {
 	if err != nil {
 		return nil
 	}
+	if u.User == nil {
+		return nil
+	}
 	port := 443
 	if p := u.Port(); p != "" {
 		if v, err := strconv.Atoi(p); err == nil {
 			port = v
 		}
 	}
+	password := u.User.Username()
+	if p, ok := u.User.Password(); ok {
+		password += ":" + p
+	}
 	params := map[string]string{}
 	for k, v := range u.Query() {
 		if len(v) > 0 {
 			params[k] = v[0]
+		} else {
+			params[k] = ""
 		}
 	}
 	normalizeInsecure(params)
@@ -212,7 +221,7 @@ func parseTrojan(line string) *ProxyRecord {
 		Protocol:       Trojan,
 		Host:           u.Hostname(),
 		Port:           port,
-		UUIDOrPassword: u.User.Username(),
+		UUIDOrPassword: password,
 		QueryParams:    params,
 		Fragment:       u.Fragment,
 		OriginalLine:   line,

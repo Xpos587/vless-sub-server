@@ -1,6 +1,8 @@
 package parse
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestDedupKeyIncludesPassword(t *testing.T) {
 	records := []string{
@@ -27,5 +29,22 @@ func TestDedupKeySameHostPortProtocolSameUUID(t *testing.T) {
 	}
 	if result.Duplicates != 1 {
 		t.Fatalf("expected 1 duplicate, got %d", result.Duplicates)
+	}
+}
+
+func TestTrojanNoPasswordNoPanic(t *testing.T) {
+	record := parseTrojan("trojan://example.com:443?security=tls")
+	if record != nil {
+		t.Fatal("expected nil for URL without password")
+	}
+}
+
+func TestTrojanPasswordWithColon(t *testing.T) {
+	record := parseTrojan("trojan://pass:word@example.com:443?security=tls")
+	if record == nil {
+		t.Fatal("expected non-nil record")
+	}
+	if record.UUIDOrPassword != "pass:word" {
+		t.Fatalf("expected password 'pass:word', got %q", record.UUIDOrPassword)
 	}
 }
