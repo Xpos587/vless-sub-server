@@ -8,7 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +17,8 @@ import (
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
 
+	"github.com/xtls/xray-core/common/session"
+	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -31,17 +33,17 @@ type ExitProbeResult struct {
 }
 
 type ExitProber struct {
-	cfg        *config.Config
-	instance   *core.Instance
-	socksPorts map[int]int // proxy index -> socks port
-	transport  *http.Transport
-	mu         sync.Mutex
+	cfg       *config.Config
+	instance  *core.Instance
+	proxyTags []string // proxy index -> outbound tag
+	transport *http.Transport
+	mu        sync.Mutex
 }
 
 func NewExitProber(cfg *config.Config) *ExitProber {
 	return &ExitProber{
-		cfg: cfg,
-		socksPorts: make(map[int]int),
+		cfg:       cfg,
+		proxyTags: nil,
 		transport: &http.Transport{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   20,
@@ -62,7 +64,7 @@ func (ep *ExitProber) StartWithProxies(records []parse.ProxyRecord) error {
 		ep.instance = nil
 	}
 
-	configJSON := buildCheckConfig(records, ep.cfg.SocksStartPort)
+	configJSON := buildOutboundOnlyConfig(records)
 	xrayConfig, err := serial.DecodeJSONConfig(bytes.NewReader(configJSON))
 	if err != nil {
 		return fmt.Errorf("decode xray config: %w", err)
@@ -81,8 +83,9 @@ func (ep *ExitProber) StartWithProxies(records []parse.ProxyRecord) error {
 	}
 
 	ep.instance = instance
+	ep.proxyTags = make([]string, len(records))
 	for i := range records {
-		ep.socksPorts[i] = ep.cfg.SocksStartPort + i
+		ep.proxyTags[i] = fmt.Sprintf("proxy_%d_out", i)
 	}
 
 	return nil
@@ -132,17 +135,24 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	default:
 	}
 
-	port, ok := ep.socksPorts[idx]
-	if !ok {
+	if idx >= len(ep.proxyTags) {
 		return &ExitProbeResult{XrayOK: false}
 	}
+	outboundTag := ep.proxyTags[idx]
 
-	proxyURL, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", port))
-	transport := ep.transport.Clone()
-	transport.Proxy = http.ProxyURL(proxyURL)
-	client := &http.Client{
-		Transport: transport,
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			ctx = session.SetForcedOutboundTagToContext(ctx, outboundTag)
+			host, portStr, _ := net.SplitHostPort(addr)
+			port, _ := strconv.Atoi(portStr)
+			dest := xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(port))
+			return core.Dial(ctx, ep.instance, dest)
+		},
+		TLSHandshakeTimeout:   ep.cfg.ExitProbeTimeout,
+		ResponseHeaderTimeout: ep.cfg.ExitProbeTimeout,
+		IdleConnTimeout:        90 * time.Second,
 	}
+	client := &http.Client{Transport: transport}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://ipwho.is/", nil)
 	if err != nil {
@@ -163,7 +173,6 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 
 	var ipResp geo.IPWhoisResponse
 	if err := json.Unmarshal(body, &ipResp); err != nil || !ipResp.Success {
-		// Try CF trace as fallback
 		return ep.probeCFTrace(ctx, transport)
 	}
 
@@ -281,17 +290,6 @@ func (ep *ExitProber) batchGeoLookup(results map[int]*ExitProbeResult) {
 	}
 }
 
-type xrayInbound struct {
-	Tag      string `json:"tag"`
-	Port     int    `json:"port"`
-	Listen   string `json:"listen"`
-	Protocol string `json:"protocol"`
-	Settings struct {
-		Auth string `json:"auth"`
-		UDP  bool   `json:"udp"`
-	} `json:"settings"`
-}
-
 type xrayOutbound struct {
 	Tag            string          `json:"tag"`
 	Protocol       string          `json:"protocol"`
@@ -299,28 +297,16 @@ type xrayOutbound struct {
 	StreamSettings map[string]any  `json:"streamSettings,omitempty"`
 }
 
-type xrayRoutingRule struct {
-	Type        string   `json:"type"`
-	InboundTag  []string `json:"inboundTag"`
-	OutboundTag string   `json:"outboundTag"`
-}
-
-type xrayConfig struct {
+type xrayDialConfig struct {
 	Log       map[string]any    `json:"log"`
-	Inbounds  []xrayInbound     `json:"inbounds"`
 	Outbounds []xrayOutbound    `json:"outbounds"`
-	Routing   struct {
-		Rules []xrayRoutingRule `json:"rules"`
-	} `json:"routing"`
 }
 
-func buildCheckConfig(records []parse.ProxyRecord, startPort int) []byte {
-
-	cfg := xrayConfig{
+func buildOutboundOnlyConfig(records []parse.ProxyRecord) []byte {
+	cfg := xrayDialConfig{
 		Log: map[string]any{"loglevel": "warning"},
 	}
 
-	// Direct outbound
 	cfg.Outbounds = append(cfg.Outbounds, xrayOutbound{
 		Tag:      "direct",
 		Protocol: "freedom",
@@ -328,27 +314,9 @@ func buildCheckConfig(records []parse.ProxyRecord, startPort int) []byte {
 	})
 
 	for i, rec := range records {
-		inTag := fmt.Sprintf("proxy_%d_in", i)
 		outTag := fmt.Sprintf("proxy_%d_out", i)
-
-		ib := xrayInbound{
-			Tag:      inTag,
-			Port:     startPort + i,
-			Listen:   "127.0.0.1",
-			Protocol: "socks",
-		}
-		ib.Settings.Auth = "noauth"
-		ib.Settings.UDP = false
-		cfg.Inbounds = append(cfg.Inbounds, ib)
-
 		ob := buildOutbound(rec, outTag)
 		cfg.Outbounds = append(cfg.Outbounds, ob)
-
-		cfg.Routing.Rules = append(cfg.Routing.Rules, xrayRoutingRule{
-			Type:        "field",
-			InboundTag:  []string{inTag},
-			OutboundTag: outTag,
-		})
 	}
 
 	data, _ := json.MarshalIndent(cfg, "", "  ")
