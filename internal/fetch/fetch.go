@@ -167,14 +167,19 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		if !ok || len(vnext) == 0 {
 			return ""
 		}
-		server := vnext[0].(map[string]any)
+		server, ok := vnext[0].(map[string]any)
+		if !ok {
+			return ""
+		}
 		users, _ := server["users"].([]any)
 		var uuid string
 		if len(users) > 0 {
-			u, _ := users[0].(map[string]any)
-			uuid, _ = u["id"].(string)
-			if uuid == "" {
-				uuid, _ = u["uuid"].(string)
+			u, ok := users[0].(map[string]any)
+			if ok {
+				uuid, _ = u["id"].(string)
+				if uuid == "" {
+					uuid, _ = u["uuid"].(string)
+				}
 			}
 		}
 		address, _ := server["address"].(string)
@@ -207,9 +212,11 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		}
 		// encryption from user settings
 		if len(users) > 0 {
-			u, _ := users[0].(map[string]any)
-			if enc, ok := u["encryption"].(string); ok && enc != "" && enc != "none" {
-				params.Set("encryption", enc)
+			u, ok := users[0].(map[string]any)
+			if ok {
+				if enc, ok := u["encryption"].(string); ok && enc != "" && enc != "none" {
+					params.Set("encryption", enc)
+				}
 			}
 		}
 
@@ -262,12 +269,17 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		if !ok || len(vnext) == 0 {
 			return ""
 		}
-		server := vnext[0].(map[string]any)
+		server, ok := vnext[0].(map[string]any)
+		if !ok {
+			return ""
+		}
 		users, _ := server["users"].([]any)
 		var uuid string
 		if len(users) > 0 {
-			u, _ := users[0].(map[string]any)
-			uuid, _ = u["id"].(string)
+			u, ok := users[0].(map[string]any)
+			if ok {
+				uuid, _ = u["id"].(string)
+			}
 		}
 		address, _ := server["address"].(string)
 		port := 443
@@ -321,7 +333,10 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		if !ok || len(servers) == 0 {
 			return ""
 		}
-		server := servers[0].(map[string]any)
+		server, ok := servers[0].(map[string]any)
+		if !ok {
+			return ""
+		}
 		password, _ := server["password"].(string)
 		address, _ := server["address"].(string)
 		port := 443
@@ -354,7 +369,10 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		if !ok || len(servers) == 0 {
 			return ""
 		}
-		server := servers[0].(map[string]any)
+		server, ok := servers[0].(map[string]any)
+		if !ok {
+			return ""
+		}
 		method := "aes-256-gcm"
 		if m, ok := server["method"].(string); ok {
 			method = m
@@ -404,6 +422,9 @@ func extractSingboxURLs(data json.RawMessage) []string {
 			tag, _ := outbound["tag"].(string)
 			settings, _ := outbound["settings"].(map[string]any)
 			stream, _ := outbound["streamSettings"].(map[string]any)
+			if stream == nil {
+				stream, _ = outbound["transport"].(map[string]any)
+			}
 			remark := remarks
 			if remark == "" {
 				remark = tag
