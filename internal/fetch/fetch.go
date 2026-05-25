@@ -354,8 +354,52 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		if fp != "" {
 			params.Set("fp", fp)
 		}
-		if net != "tcp" {
+		if pbk != "" {
+			params.Set("pbk", pbk)
+		}
+		if sid != "" {
+			params.Set("sid", sid)
+		}
+		if net != "" && net != "tcp" {
 			params.Set("type", net)
+		}
+
+		// Transport settings
+		if xs, ok := stream["xhttpSettings"].(map[string]any); ok {
+			if p, ok := xs["path"].(string); ok {
+				params.Set("path", p)
+			}
+			if m, ok := xs["mode"].(string); ok {
+				params.Set("mode", m)
+			}
+			if h, ok := xs["host"].(string); ok {
+				params.Set("host", h)
+			}
+		}
+		if ws, ok := stream["wsSettings"].(map[string]any); ok {
+			if p, ok := ws["path"].(string); ok {
+				params.Set("path", p)
+			}
+			if h, ok := ws["headers"].(map[string]any); ok {
+				if host, ok := h["Host"].(string); ok {
+					params.Set("host", host)
+				}
+			}
+		}
+		if gs, ok := stream["grpcSettings"].(map[string]any); ok {
+			if sn, ok := gs["serviceName"].(string); ok {
+				params.Set("serviceName", sn)
+			}
+			if m, ok := gs["mode"].(string); ok {
+				params.Set("mode", m)
+			}
+		}
+		if tc, ok := stream["tcpSettings"].(map[string]any); ok {
+			if h, ok := tc["header"].(map[string]any); ok {
+				if t, ok := h["type"].(string); ok && t == "http" {
+					params.Set("headerType", "http")
+				}
+			}
 		}
 
 		frag := ""

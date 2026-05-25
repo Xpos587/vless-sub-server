@@ -26,6 +26,41 @@ func TestExtractSingboxURLsNullServer(t *testing.T) {
 	extractSingboxURLs(data)
 }
 
+func TestSingboxTrojanReality(t *testing.T) {
+	input := `[{"outbounds":[{"protocol":"trojan","tag":"test","settings":{"servers":[{"address":"example.com","port":443,"password":"pass"}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"serverName":"sni.example.com","fingerprint":"chrome","publicKey":"pubkey","shortId":"short"}}}],"remarks":"test"}]`
+	var data json.RawMessage = []byte(input)
+	urls := extractSingboxURLs(data)
+	if len(urls) == 0 {
+		t.Fatal("expected URL from Trojan Reality")
+	}
+	u := urls[0]
+	if !containsStr(u, "pbk=pubkey") {
+		t.Fatalf("expected pbk=pubkey in URL, got %s", u)
+	}
+	if !containsStr(u, "sid=short") {
+		t.Fatalf("expected sid=short in URL, got %s", u)
+	}
+	if !containsStr(u, "security=reality") {
+		t.Fatalf("expected security=reality in URL, got %s", u)
+	}
+}
+
+func TestSingboxTrojanWS(t *testing.T) {
+	input := `[{"outbounds":[{"protocol":"trojan","tag":"test","settings":{"servers":[{"address":"example.com","port":443,"password":"pass"}]},"streamSettings":{"network":"ws","security":"tls","tlsSettings":{"serverName":"sni.example.com"},"wsSettings":{"path":"/ws","headers":{"Host":"ws.example.com"}}}}],"remarks":"test"}]`
+	var data json.RawMessage = []byte(input)
+	urls := extractSingboxURLs(data)
+	if len(urls) == 0 {
+		t.Fatal("expected URL from Trojan WS")
+	}
+	u := urls[0]
+	if !containsStr(u, "type=ws") {
+		t.Fatalf("expected type=ws in URL, got %s", u)
+	}
+	if !containsStr(u, "path=") {
+		t.Fatalf("expected path in URL, got %s", u)
+	}
+}
+
 func containsStr(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || containsHelper(s, substr))
 }
