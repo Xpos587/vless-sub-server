@@ -63,6 +63,13 @@ func reconstructURL(record parse.ProxyRecord, fragment string) string {
 	}
 }
 
+func formatHost(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
 func reconstructVless(record parse.ProxyRecord, fragment string) string {
 	params := url.Values{}
 	for k, v := range record.QueryParams {
@@ -72,7 +79,8 @@ func reconstructVless(record parse.ProxyRecord, fragment string) string {
 	if fragment != "" {
 		frag = "#" + url.PathEscape(fragment)
 	}
-	return fmt.Sprintf("vless://%s@%s:%d?%s%s", record.UUIDOrPassword, record.Host, record.Port, params.Encode(), frag)
+	userinfo := url.User(record.UUIDOrPassword).String()
+	return fmt.Sprintf("vless://%s@%s:%d?%s%s", userinfo, formatHost(record.Host), record.Port, params.Encode(), frag)
 }
 
 func reconstructVMess(record parse.ProxyRecord, fragment string) string {
@@ -112,7 +120,8 @@ func reconstructTrojan(record parse.ProxyRecord, fragment string) string {
 	if fragment != "" {
 		frag = "#" + url.PathEscape(fragment)
 	}
-	return fmt.Sprintf("trojan://%s@%s:%d?%s%s", record.UUIDOrPassword, record.Host, record.Port, params.Encode(), frag)
+	userinfo := url.User(record.UUIDOrPassword).String()
+	return fmt.Sprintf("trojan://%s@%s:%d?%s%s", userinfo, formatHost(record.Host), record.Port, params.Encode(), frag)
 }
 
 func reconstructSS(record parse.ProxyRecord, fragment string) string {
@@ -120,10 +129,10 @@ func reconstructSS(record parse.ProxyRecord, fragment string) string {
 	if method == "" {
 		method = "aes-256-gcm"
 	}
-	userInfo := base64.URLEncoding.EncodeToString([]byte(method + ":" + record.UUIDOrPassword))
+	userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + record.UUIDOrPassword))
 	frag := ""
 	if fragment != "" {
 		frag = "#" + url.PathEscape(fragment)
 	}
-	return fmt.Sprintf("ss://%s@%s:%d%s", userInfo, record.Host, record.Port, frag)
+	return fmt.Sprintf("ss://%s@%s:%d%s", userInfo, formatHost(record.Host), record.Port, frag)
 }
