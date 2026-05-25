@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -306,7 +305,7 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		v = cache.Load()
 	}
 	data := v.(*cachedData)
-	body := []byte(base64.StdEncoding.EncodeToString([]byte(data.output)))
+	body := []byte(data.output)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
