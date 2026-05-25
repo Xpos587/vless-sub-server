@@ -129,7 +129,7 @@ func splitNonEmpty(s string) []string {
 
 func hasProxyScheme(lines []string) bool {
 	for _, l := range lines {
-		for _, s := range []string{"vless://", "vmess://", "trojan://", "ss://"} {
+		for _, s := range []string{"vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://"} {
 			if strings.HasPrefix(l, s) {
 				return true
 			}
@@ -434,6 +434,43 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 			frag = "#" + url.PathEscape(remark)
 		}
 		return fmt.Sprintf("ss://%s@%s:%d%s", userInfo, address, port, frag)
+
+	case "hysteria", "hysteria2":
+		address, _ := settings["address"].(string)
+		port := 443
+		if v, ok := settings["port"].(float64); ok {
+			port = int(v)
+		}
+		auth, _ := settings["password"].(string)
+		if auth == "" {
+			auth, _ = settings["auth"].(string)
+		}
+		if address == "" {
+			return ""
+		}
+		params := url.Values{}
+		if sni != "" {
+			params.Set("sni", sni)
+		}
+		if hs, ok := stream["hysteriaSettings"].(map[string]any); ok {
+			if s, ok := hs["sni"].(string); ok && s != "" {
+				params.Set("sni", s)
+			}
+			if a, ok := hs["auth"].(string); ok && a != "" && auth == "" {
+				auth = a
+			}
+			if a, ok := hs["auth_str"].(string); ok && a != "" && auth == "" {
+				auth = a
+			}
+		}
+		if params.Get("sni") == "" {
+			params.Set("sni", address)
+		}
+		frag := ""
+		if remark != "" {
+			frag = "#" + url.PathEscape(remark)
+		}
+		return fmt.Sprintf("hysteria2://%s@%s:%d?%s%s", auth, address, port, params.Encode(), frag)
 	}
 
 	return ""
@@ -460,7 +497,7 @@ func extractSingboxURLs(data json.RawMessage) []string {
 				continue
 			}
 			proto, _ := outbound["protocol"].(string)
-			if proto != "vless" && proto != "vmess" && proto != "trojan" && proto != "shadowsocks" {
+			if proto != "vless" && proto != "vmess" && proto != "trojan" && proto != "shadowsocks" && proto != "hysteria" && proto != "hysteria2" {
 				continue
 			}
 			tag, _ := outbound["tag"].(string)

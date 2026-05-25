@@ -11,7 +11,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/config"
 )
 
-var proxySchemes = []string{"vless://", "vmess://", "trojan://", "ss://"}
+var proxySchemes = []string{"vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://"}
 
 type ParseResult struct {
 	Records   []ProxyRecord
@@ -53,6 +53,8 @@ func ParseAllLines(lines []string) ParseResult {
 			record = parseTrojan(trimmed)
 		case strings.HasPrefix(trimmed, "ss://"):
 			record = parseSS(trimmed)
+		case strings.HasPrefix(trimmed, "hysteria2://") || strings.HasPrefix(trimmed, "hy2://"):
+			record = parseHysteria2(trimmed)
 		}
 
 		if record == nil || record.Host == "" || record.Port <= 0 || record.Port > 65535 {
@@ -65,7 +67,12 @@ func ParseAllLines(lines []string) ParseResult {
 			continue
 		}
 
-		key := record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol) + ":" + record.UUIDOrPassword
+		transport := record.QueryParams["type"]
+		if transport == "" {
+			transport = "tcp"
+		}
+		sni := record.QueryParams["sni"]
+		key := record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol) + ":" + record.UUIDOrPassword + ":" + transport + ":" + sni
 		if seen[key] {
 			duplicates++
 			continue
@@ -444,4 +451,44 @@ func normalizeInsecure(params map[string]string) {
 	}
 	delete(params, "allowInsecure")
 	delete(params, "allow_insecure")
+}
+
+func parseHysteria2(line string) *ProxyRecord {
+	u, err := url.Parse(line)
+	if err != nil {
+		return nil
+	}
+	if u.User == nil {
+		return nil
+	}
+	port := 443
+	if p := u.Port(); p != "" {
+		if v, err := strconv.Atoi(p); err == nil {
+			port = v
+		}
+	}
+	auth := u.User.Username()
+	if p, ok := u.User.Password(); ok {
+		auth += ":" + p
+	}
+	params := map[string]string{}
+	for k, v := range u.Query() {
+		if len(v) > 0 {
+			params[k] = v[0]
+		} else {
+			params[k] = ""
+		}
+	}
+	normalizeInsecure(params)
+	params["security"] = "tls"
+
+	return &ProxyRecord{
+		Protocol:       Hysteria2,
+		Host:           u.Hostname(),
+		Port:           port,
+		UUIDOrPassword: auth,
+		QueryParams:    params,
+		Fragment:       u.Fragment,
+		OriginalLine:   line,
+	}
 }

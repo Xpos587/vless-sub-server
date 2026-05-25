@@ -58,6 +58,8 @@ func reconstructURL(record parse.ProxyRecord, fragment string) string {
 		return reconstructTrojan(record, fragment)
 	case parse.SS:
 		return reconstructSS(record, fragment)
+	case parse.Hysteria2:
+		return reconstructHysteria2(record, fragment)
 	default:
 		return record.OriginalLine
 	}
@@ -160,4 +162,24 @@ func reconstructSS(record parse.ProxyRecord, fragment string) string {
 		frag = "#" + url.PathEscape(fragment)
 	}
 	return fmt.Sprintf("ss://%s@%s:%d%s", userInfo, formatHost(record.Host), record.Port, frag)
+}
+
+func reconstructHysteria2(record parse.ProxyRecord, fragment string) string {
+	params := url.Values{}
+	for k, v := range record.QueryParams {
+		if k == "security" {
+			continue
+		}
+		params.Set(k, v)
+	}
+	frag := ""
+	if fragment != "" {
+		frag = "#" + url.PathEscape(fragment)
+	}
+	userinfo := url.User(record.UUIDOrPassword).String()
+	query := params.Encode()
+	if query != "" {
+		query = "?" + query
+	}
+	return fmt.Sprintf("hysteria2://%s@%s:%d%s%s", userinfo, formatHost(record.Host), record.Port, query, frag)
 }

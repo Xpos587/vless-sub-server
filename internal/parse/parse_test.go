@@ -169,6 +169,48 @@ func TestSSLegacyBase64(t *testing.T) {
 	}
 }
 
+func TestDedupDifferentTransport(t *testing.T) {
+	records := []string{
+		"vless://uuid1@real-host.com:443?type=ws&security=tls#WS",
+		"vless://uuid1@real-host.com:443?type=grpc&security=tls#GRPC",
+	}
+	result := ParseAllLines(records)
+	if len(result.Records) != 2 {
+		t.Fatalf("expected 2 records (different transport), got %d", len(result.Records))
+	}
+	if result.Duplicates != 0 {
+		t.Fatalf("expected 0 duplicates, got %d", result.Duplicates)
+	}
+}
+
+func TestDedupSameTransportDuplicate(t *testing.T) {
+	records := []string{
+		"vless://uuid1@real-host.com:443?type=ws&security=tls#A",
+		"vless://uuid1@real-host.com:443?type=ws&security=tls#B",
+	}
+	result := ParseAllLines(records)
+	if len(result.Records) != 1 {
+		t.Fatalf("expected 1 record (same transport), got %d", len(result.Records))
+	}
+	if result.Duplicates != 1 {
+		t.Fatalf("expected 1 duplicate, got %d", result.Duplicates)
+	}
+}
+
+func TestDedupDifferentSNI(t *testing.T) {
+	records := []string{
+		"vless://uuid1@balancer.com:443?type=grpc&security=tls&sni=de.balancer.com#DE",
+		"vless://uuid1@balancer.com:443?type=grpc&security=tls&sni=fi.balancer.com#FI",
+	}
+	result := ParseAllLines(records)
+	if len(result.Records) != 2 {
+		t.Fatalf("expected 2 records (different SNI), got %d", len(result.Records))
+	}
+	if result.Duplicates != 0 {
+		t.Fatalf("expected 0 duplicates, got %d", result.Duplicates)
+	}
+}
+
 func TestVMessV1Rejected(t *testing.T) {
 	vmessJSON := `{"v":"1","ps":"test","add":"example.com","port":443,"id":"uuid"}`
 	encoded := base64.StdEncoding.EncodeToString([]byte(vmessJSON))

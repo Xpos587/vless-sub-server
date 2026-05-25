@@ -399,6 +399,14 @@ func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
 				},
 			},
 		}
+
+	case parse.Hysteria2:
+		ob.Protocol = "hysteria"
+		ob.Settings = map[string]any{
+			"address": rec.Host,
+			"port":    rec.Port,
+			"version": 2,
+		}
 	}
 
 	ob.StreamSettings = buildStreamSettings(rec)
@@ -412,10 +420,18 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 	}
 
 	if ss["network"] == nil {
-		ss["network"] = "tcp"
+		if rec.Protocol == parse.Hysteria2 {
+			ss["network"] = "hysteria"
+		} else {
+			ss["network"] = "tcp"
+		}
 	}
 	if ss["security"] == nil {
-		ss["security"] = "none"
+		if rec.Protocol == parse.Hysteria2 {
+			ss["security"] = "tls"
+		} else {
+			ss["security"] = "none"
+		}
 	}
 
 	network := ss["network"].(string)
@@ -469,7 +485,7 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 			ws["path"] = v
 		}
 		if v, ok := rec.QueryParams["host"]; ok {
-			ws["headers"] = map[string]any{"Host": v}
+			ws["host"] = v
 		}
 		ss["wsSettings"] = ws
 	case "grpc":
@@ -481,6 +497,15 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 			gs["multiMode"] = (v == "multi")
 		}
 		ss["grpcSettings"] = gs
+	case "kcp":
+		ks := map[string]any{}
+		if v, ok := rec.QueryParams["seed"]; ok {
+			ks["seed"] = v
+		}
+		if rec.QueryParams["headerType"] == "http" {
+			ks["header"] = map[string]any{"type": "http"}
+		}
+		ss["kcpSettings"] = ks
 	case "httpupgrade":
 		hu := map[string]any{}
 		if v, ok := rec.QueryParams["path"]; ok {
@@ -502,6 +527,12 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 			xh["mode"] = v
 		}
 		ss["xhttpSettings"] = xh
+	case "hysteria":
+		hy := map[string]any{
+			"version": 2,
+			"auth":     rec.UUIDOrPassword,
+		}
+		ss["hysteriaSettings"] = hy
 	}
 
 	return ss
