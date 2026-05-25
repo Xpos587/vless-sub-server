@@ -414,28 +414,27 @@ func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
 }
 
 func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
+	network := rec.QueryParams["type"]
+	if network == "" {
+		if rec.Protocol == parse.Hysteria2 {
+			network = "hysteria"
+		} else {
+			network = "tcp"
+		}
+	}
+	security := rec.QueryParams["security"]
+	if security == "" {
+		if rec.Protocol == parse.Hysteria2 {
+			security = "tls"
+		} else {
+			security = "none"
+		}
+	}
 	ss := map[string]any{
-		"network":  rec.QueryParams["type"],
-		"security": rec.QueryParams["security"],
+		"network":  network,
+		"security": security,
 	}
 
-	if ss["network"] == nil {
-		if rec.Protocol == parse.Hysteria2 {
-			ss["network"] = "hysteria"
-		} else {
-			ss["network"] = "tcp"
-		}
-	}
-	if ss["security"] == nil {
-		if rec.Protocol == parse.Hysteria2 {
-			ss["security"] = "tls"
-		} else {
-			ss["security"] = "none"
-		}
-	}
-
-	network := ss["network"].(string)
-	security := ss["security"].(string)
 
 	if security == "reality" {
 		rs := map[string]any{}
