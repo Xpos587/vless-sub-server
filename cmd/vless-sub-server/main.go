@@ -21,8 +21,6 @@ import (
 	"github.com/michael/vless-sub-server/internal/format"
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
-	"github.com/michael/vless-sub-server/internal/pipeline"
-	"github.com/michael/vless-sub-server/internal/probe"
 	"github.com/michael/vless-sub-server/internal/rename"
 )
 
@@ -109,9 +107,6 @@ func loadConfig() *config.Config {
 	}
 	c.NameInclude = envOr("NAME_INCLUDE", "")
 	c.NameExclude = envOr("NAME_EXCLUDE", "")
-	if d, err := time.ParseDuration(envOr("TCP_TIMEOUT", "3s")); err == nil {
-		c.TCPTimeout = d
-	}
 	if d, err := time.ParseDuration(envOr("DNS_TIMEOUT", "2s")); err == nil {
 		c.DNSTimeout = d
 	}
@@ -143,7 +138,7 @@ func refreshSubscriptions() {
 	defer cancel()
 
 	// Phase 1: Fetch subscriptions
-	fetchResults := fetch.FetchSubscriptions(ctx, cfg.SubscriptionURLs, 8*time.Second)
+	fetchResults := fetch.FetchSubscriptions(ctx, cfg.SubscriptionURLs, 15*time.Second)
 	sourcesOK := 0
 	sourcesFailed := 0
 	for _, r := range fetchResults {
@@ -162,31 +157,36 @@ func refreshSubscriptions() {
 	parseResult := parse.ParseAllLines(allLines)
 	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
 
-	// Phase 3+4: DNS resolve + TCP probe (via pipeline package)
-	result := pipeline.ProbeAndFilterStream(ctx, filtered, 20, cfg.DNSTimeout, cfg.TCPTimeout, dnsCache)
-	aliveProxies := result.Alive
+	// Phase 3: DNS resolve
+	dnsMap := dns.ResolveHosts(ctx, dedupHosts(filtered), 20, cfg.DNSTimeout, dnsCache)
 
-	// Reconstruct dnsMap from pipeline results (needed for geo isLAN checks)
-	dnsMap := make(map[string]*dns.DNSResult)
-	for _, p := range aliveProxies {
-		if p.DNS != nil {
-			dnsMap[p.Record.Host] = p.DNS
+	var resolved []parse.ProxyRecord
+	for _, r := range filtered {
+		if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
+			resolved = append(resolved, r)
+		}
+	}
+	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(dnsMap))
+
+	// Phase 4: Host-IP geo lookup via ip-api.com batch (for all resolved IPs)
+	hostGeoMap := make(map[string]*geo.GeoInfo)
+	if len(resolved) > 0 {
+		var hostIPs []string
+		seen := make(map[string]bool)
+		for _, r := range resolved {
+			if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
+				if !seen[d.IP] {
+					seen[d.IP] = true
+					hostIPs = append(hostIPs, d.IP)
+				}
+			}
+		}
+		if len(hostIPs) > 0 {
+			hostGeoMap = geo.BatchGeoLookup(hostIPs, 10*time.Second)
 		}
 	}
 
-	// Reconstruct probeResults for rename.RenameAll
-	probeResults := make(map[string]*probe.ProbeResult)
-	for _, p := range aliveProxies {
-		key := fmt.Sprintf("%s:%d", p.Record.Host, p.Record.Port)
-		probeResults[key] = p.Probe
-	}
-
-	var aliveRecords []parse.ProxyRecord
-	for _, p := range aliveProxies {
-		aliveRecords = append(aliveRecords, p.Record)
-	}
-
-	// Phase 5: Exit-IP probe via Xray
+	// Phase 5: Exit-IP probe via Xray (override host geo with exit geo)
 	var geoRecords []struct {
 		Record parse.ProxyRecord
 		Geo    *geo.GeoInfo
@@ -194,22 +194,30 @@ func refreshSubscriptions() {
 	}
 	geoAvailable := 0
 
-	if len(aliveRecords) > 0 {
+	if len(resolved) > 0 {
 		ep := exitprobe.NewExitProber(cfg)
-		if err := ep.StartWithProxies(aliveRecords); err != nil {
-			log.Printf("[refresh] xray start failed: %v, proceeding without exit-IP geo", err)
-			for _, p := range aliveProxies {
+		if err := ep.StartWithProxies(resolved); err != nil {
+			log.Printf("[refresh] xray start failed: %v, using host-IP geo only", err)
+			for _, r := range resolved {
+				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
+				var geoInfo *geo.GeoInfo
+				if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
+					geoInfo = hostGeoMap[d.IP]
+				}
+				if geoInfo != nil {
+					geoAvailable++
+				}
 				geoRecords = append(geoRecords, struct {
 					Record parse.ProxyRecord
 					Geo    *geo.GeoInfo
 					IsLAN  bool
-				}{p.Record, nil, p.IsLAN})
+				}{r, geoInfo, isLAN})
 			}
 		} else {
-			exitResults := ep.ProbeAll(ctx, aliveRecords)
+			exitResults := ep.ProbeAll(ctx, resolved)
 			ep.Stop()
 
-			for i, r := range aliveRecords {
+			for i, r := range resolved {
 				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
 				var geoInfo *geo.GeoInfo
 				if er, ok := exitResults[i]; ok && er.XrayOK {
@@ -226,6 +234,15 @@ func refreshSubscriptions() {
 						geoAvailable++
 					}
 				}
+				// Fallback: use host-IP geo when xray probe failed
+				if geoInfo == nil {
+					if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
+						geoInfo = hostGeoMap[d.IP]
+					}
+					if geoInfo != nil {
+						geoAvailable++
+					}
+				}
 				geoRecords = append(geoRecords, struct {
 					Record parse.ProxyRecord
 					Geo    *geo.GeoInfo
@@ -235,29 +252,41 @@ func refreshSubscriptions() {
 		}
 	}
 
-	// Phase 6: Rename
-	renamed := rename.RenameAll(geoRecords, probeResults)
+	// Phase 5: Rename
+	renamed := rename.RenameAll(geoRecords)
 
 	totalAlive := len(renamed)
-	totalDead := result.DNSResolved - totalAlive
+	totalDead := len(resolved) - totalAlive
 
 	output := format.FormatOutput(renamed, format.FormatMetadata{
 		TotalFetched:    len(allLines),
 		TotalParsed:     len(filtered),
 		TotalSkipped:    parseResult.Skipped,
-		TotalDuplicates:  parseResult.Duplicates,
+		TotalDuplicates: parseResult.Duplicates,
 		TotalAlive:      totalAlive,
 		TotalDead:       totalDead,
 		SourcesOK:       sourcesOK,
 		SourcesFailed:   sourcesFailed,
 		GeoAvailable:    geoAvailable,
-		GeoTotal:        result.DNSResolved,
+		GeoTotal:        len(resolved),
 	})
 
 	cachedOutput = output
 	lastRefresh = time.Now()
 	dnsCache.Purge()
 	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
+}
+
+func dedupHosts(records []parse.ProxyRecord) []string {
+	seen := make(map[string]bool, len(records))
+	var hosts []string
+	for _, r := range records {
+		if !seen[r.Host] {
+			seen[r.Host] = true
+			hosts = append(hosts, r.Host)
+		}
+	}
+	return hosts
 }
 
 func handleSub(w http.ResponseWriter, r *http.Request) {

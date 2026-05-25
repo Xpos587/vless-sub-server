@@ -5,7 +5,6 @@ import (
 
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
-	"github.com/michael/vless-sub-server/internal/probe"
 )
 
 type RenamedEntry struct {
@@ -26,18 +25,21 @@ func RenameAll(records []struct {
 	Record parse.ProxyRecord
 	Geo    *geo.GeoInfo
 	IsLAN  bool
-}, probeResults map[string]*probe.ProbeResult) []RenamedEntry {
+}) []RenamedEntry {
 	var entries []RenamedEntry
 	nameCounts := map[string]int{}
 
 	for _, r := range records {
-		key := fmt.Sprintf("%s:%d", r.Record.Host, r.Record.Port)
-		p, ok := probeResults[key]
-		if !ok || !p.Reachable {
-			continue
+		var baseName string
+		if r.Geo != nil {
+			baseName = buildName(r.Geo)
+		} else {
+			name := r.Record.Fragment
+			if name == "" {
+				name = r.Record.Host
+			}
+			baseName = name
 		}
-
-		baseName := buildName(r.Record, r.Geo, r.IsLAN)
 		count := nameCounts[baseName]
 		nameCounts[baseName] = count + 1
 
@@ -50,17 +52,7 @@ func RenameAll(records []struct {
 	return entries
 }
 
-func buildName(record parse.ProxyRecord, geoInfo *geo.GeoInfo, isLAN bool) string {
-	if isLAN {
-		return fmt.Sprintf("%s LAN %s", CountryCodeToFlag("LAN"), record.Host)
-	}
-	if geoInfo == nil {
-		if record.Fragment != "" {
-			return record.Fragment
-		}
-		return record.Host
-	}
-
+func buildName(geoInfo *geo.GeoInfo) string {
 	city := geoInfo.City
 	if city == "" {
 		city = geoInfo.CountryCode

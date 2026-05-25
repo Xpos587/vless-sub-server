@@ -105,7 +105,7 @@ func ResolveHosts(ctx context.Context, hosts []string, maxConcurrent int, timeou
 	return results
 }
 
-func resolveWithRetry(ctx context.Context, host string, timeout time.Duration) (string, bool) {
+func resolveWithRetry(_ context.Context, host string, timeout time.Duration) (string, bool) {
 	if ip := net.ParseIP(host); ip != nil {
 		if isPrivateIP(ip) {
 			return host, true
@@ -113,49 +113,71 @@ func resolveWithRetry(ctx context.Context, host string, timeout time.Duration) (
 		return host, false
 	}
 
-	select {
-	case <-ctx.Done():
-		return "", false
-	default:
-	}
-	if ip, ok := resolveOne(ctx, host, timeout); ok {
+	if ip, ok := resolveSystem(context.Background(), host); ok {
 		return ip, isPrivateIPStr(ip)
 	}
-	select {
-	case <-time.After(500 * time.Millisecond):
-	case <-ctx.Done():
-		return "", false
+
+	if ip, ok := resolveOne(context.Background(), host, timeout); ok {
+		return ip, isPrivateIPStr(ip)
 	}
-	if ip, ok := resolveOne(ctx, host, timeout); ok {
+	time.Sleep(500 * time.Millisecond)
+	if ip, ok := resolveOne(context.Background(), host, timeout); ok {
 		return ip, isPrivateIPStr(ip)
 	}
 	return "", false
 }
 
+func resolveSystem(ctx context.Context, host string) (string, bool) {
+	sysCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ips, err := net.DefaultResolver.LookupIPAddr(sysCtx, host)
+	if err != nil {
+		return "", false
+	}
+	for _, ip := range ips {
+		if v4 := ip.IP.To4(); v4 != nil {
+			return v4.String(), true
+		}
+	}
+	return "", false
+}
+
 func resolveOne(ctx context.Context, host string, timeout time.Duration) (string, bool) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	resolveCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(host), dns.TypeA)
 	m.RecursionDesired = true
 
-	c := new(dns.Client)
-	c.Timeout = timeout
-	r, _, err := c.ExchangeContext(ctx, m, "8.8.8.8:53")
-	if err != nil {
-		return "", false
+	servers := []struct {
+		addr string
+		net  string
+	}{
+		{"100.100.100.100:53", "udp"}, // Tailscale DNS
+		{"8.8.8.8:53", "tcp"},          // Google DNS over TCP (UDP often blocked)
+		{"1.1.1.1:53", "tcp"},           // Cloudflare DNS over TCP
 	}
 
-	if len(r.Answer) == 0 {
-		return "", false
-	}
-
-	for _, ans := range r.Answer {
-		if a, ok := ans.(*dns.A); ok {
-			return a.A.String(), false
+	for _, s := range servers {
+		c := new(dns.Client)
+		c.Net = s.net
+		c.Timeout = timeout
+		r, _, err := c.ExchangeContext(resolveCtx, m, s.addr)
+		if err != nil {
+			continue
+		}
+		if len(r.Answer) == 0 {
+			continue
+		}
+		for _, ans := range r.Answer {
+			if a, ok := ans.(*dns.A); ok {
+				return a.A.String(), false
+			}
 		}
 	}
+
 	return "", false
 }
 
