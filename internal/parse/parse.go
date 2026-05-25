@@ -115,6 +115,8 @@ func parseVless(line string) *ProxyRecord {
 	for k, v := range u.Query() {
 		if len(v) > 0 {
 			params[k] = v[0]
+		} else {
+			params[k] = ""
 		}
 	}
 	normalizeInsecure(params)
@@ -143,16 +145,17 @@ func parseVMess(line string) *ProxyRecord {
 	}
 
 	var cfg struct {
-		Host string `json:"add"`
-		Port int    `json:"port"`
-		ID   string `json:"id"`
-		PS   string `json:"ps"`
-		Net  string `json:"net"`
-		TLS  string `json:"tls"`
-		SNI  string `json:"sni"`
-		Path string `json:"path"`
-		Host2 string `json:"host"`
-		Flow string `json:"flow"`
+		Host          string `json:"add"`
+		Port          int    `json:"port"`
+		ID            string `json:"id"`
+		PS            string `json:"ps"`
+		Net           string `json:"net"`
+		TLS           string `json:"tls"`
+		SNI           string `json:"sni"`
+		Path          string `json:"path"`
+		Host2         string `json:"host"`
+		Flow          string `json:"flow"`
+		AllowInsecure bool   `json:"allowInsecure"`
 	}
 	if err := json.Unmarshal(decoded, &cfg); err != nil {
 		return nil
@@ -177,6 +180,10 @@ func parseVMess(line string) *ProxyRecord {
 	if cfg.Flow != "" {
 		params["flow"] = cfg.Flow
 	}
+	if cfg.AllowInsecure {
+		params["insecure"] = "1"
+	}
+	normalizeInsecure(params)
 
 	return &ProxyRecord{
 		Protocol:       VMess,
@@ -275,9 +282,16 @@ func parseSS(line string) *ProxyRecord {
 }
 
 func normalizeInsecure(params map[string]string) {
-	if params["allowInsecure"] != "" || params["insecure"] != "" || params["allow_insecure"] != "" {
-		params["insecure"] = "1"
-		delete(params, "allowInsecure")
-		delete(params, "allow_insecure")
+	val := params["allowInsecure"]
+	if val == "" {
+		val = params["insecure"]
 	}
+	if val == "" {
+		val = params["allow_insecure"]
+	}
+	if val != "" {
+		params["insecure"] = "1"
+	}
+	delete(params, "allowInsecure")
+	delete(params, "allow_insecure")
 }
