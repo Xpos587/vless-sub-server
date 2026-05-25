@@ -365,8 +365,7 @@ func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
 					"users": []map[string]any{
 						{
 							"id":       rec.UUIDOrPassword,
-							"alterId":   0,
-							"security": rec.QueryParams["security"],
+							"security": vmessSecurity(rec),
 						},
 					},
 				},
@@ -385,6 +384,7 @@ func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
 		}
 
 	case parse.SS:
+		ob.Protocol = "shadowsocks"
 		method := rec.QueryParams["method"]
 		if method == "" {
 			method = "aes-256-gcm"
@@ -505,4 +505,11 @@ func vlessEncryption(rec parse.ProxyRecord) string {
 		return enc
 	}
 	return "none"
+}
+
+func vmessSecurity(rec parse.ProxyRecord) string {
+	if scy, ok := rec.QueryParams["scy"]; ok && scy != "" {
+		return scy
+	}
+	return "auto"
 }
