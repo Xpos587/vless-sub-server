@@ -421,7 +421,6 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 	network := ss["network"].(string)
 	security := ss["security"].(string)
 
-	// Reality settings
 	if security == "reality" {
 		rs := map[string]any{}
 		if v, ok := rec.QueryParams["sni"]; ok {
@@ -436,8 +435,8 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 		if v, ok := rec.QueryParams["sid"]; ok {
 			rs["shortId"] = v
 		}
-		if v, ok := rec.QueryParams["flow"]; ok {
-			rs["flow"] = v
+		if v, ok := rec.QueryParams["spx"]; ok {
+			rs["spiderX"] = v
 		}
 		ss["realitySettings"] = rs
 	} else if security == "tls" {
@@ -451,11 +450,19 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 		if rec.QueryParams["insecure"] == "1" {
 			ts["allowInsecure"] = true
 		}
+		if v, ok := rec.QueryParams["alpn"]; ok && v != "" {
+			ts["alpn"] = strings.Split(v, ",")
+		}
 		ss["tlsSettings"] = ts
 	}
 
-	// Transport settings
 	switch network {
+	case "tcp":
+		if rec.QueryParams["headerType"] == "http" {
+			ss["tcpSettings"] = map[string]any{
+				"header": map[string]any{"type": "http"},
+			}
+		}
 	case "ws":
 		ws := map[string]any{}
 		if v, ok := rec.QueryParams["path"]; ok {
