@@ -3,6 +3,7 @@ package parse
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -290,27 +291,89 @@ func parseSS(line string) *ProxyRecord {
 		main = encoded
 	}
 
+	// Split query params from host:port part
+	var hostPortStr string
+	params := map[string]string{}
+	qIdx := strings.Index(main, "?")
+	if qIdx != -1 {
+		hostPortStr = main[:qIdx]
+		for _, pair := range strings.Split(main[qIdx+1:], "&") {
+			eqIdx := strings.Index(pair, "=")
+			if eqIdx != -1 {
+				params[pair[:eqIdx]] = pair[eqIdx+1:]
+			} else {
+				params[pair] = ""
+			}
+		}
+		main = main[:qIdx]
+	} else {
+		hostPortStr = main
+	}
+	// SIP002 URLs may have a trailing "/" path before query params
+	main = strings.TrimSuffix(main, "/")
+	hostPortStr = strings.TrimSuffix(hostPortStr, "/")
+
 	atIdx := strings.LastIndex(main, "@")
 	if atIdx == -1 {
-		return nil
+		// Legacy format: entire main is base64(method:password@host:port)
+		decoded, err := base64decode(main)
+		if err != nil {
+			return nil
+		}
+		innerAt := strings.LastIndex(decoded, "@")
+		if innerAt == -1 {
+			return nil
+		}
+		methodPassword := decoded[:innerAt]
+		hostPortStr = decoded[innerAt+1:]
+		colonIdx := strings.Index(methodPassword, ":")
+		if colonIdx == -1 {
+			return nil
+		}
+		method := methodPassword[:colonIdx]
+		password := methodPassword[colonIdx+1:]
+		params["method"] = method
+		host, port := splitHostPort(hostPortStr)
+		if host == "" || port == 0 {
+			return nil
+		}
+		return &ProxyRecord{
+			Protocol:       SS,
+			Host:           host,
+			Port:           port,
+			UUIDOrPassword: password,
+			QueryParams:    params,
+			Fragment:       fragment,
+			OriginalLine:   line,
+		}
 	}
+
+	// SIP002 format: base64(method:password)@host:port
 	methodPassword := main[:atIdx]
-	hostPort := main[atIdx+1:]
+	hostPortStr = main[atIdx+1:]
 
-	colonIdx := strings.Index(methodPassword, ":")
-	if colonIdx == -1 {
-		return nil
+	var method, password string
+	if colonIdx := strings.Index(methodPassword, ":"); colonIdx != -1 {
+		// Unencoded legacy-style in URL (method:password@host:port)
+		method = methodPassword[:colonIdx]
+		password = methodPassword[colonIdx+1:]
+	} else {
+		// SIP002: base64(method:password)
+		decoded, err := base64decode(methodPassword)
+		if err != nil {
+			return nil
+		}
+		colonIdx := strings.Index(decoded, ":")
+		if colonIdx == -1 {
+			return nil
+		}
+		method = decoded[:colonIdx]
+		password = decoded[colonIdx+1:]
 	}
-	method := methodPassword[:colonIdx]
-	password := methodPassword[colonIdx+1:]
 
-	lastColon := strings.LastIndex(hostPort, ":")
-	if lastColon == -1 {
-		return nil
-	}
-	host := hostPort[:lastColon]
-	port, err := strconv.Atoi(hostPort[lastColon+1:])
-	if err != nil {
+	params["method"] = method
+	host, port := splitHostPort(hostPortStr)
+	if host == "" || port == 0 {
 		return nil
 	}
 
@@ -319,10 +382,53 @@ func parseSS(line string) *ProxyRecord {
 		Host:           host,
 		Port:           port,
 		UUIDOrPassword: password,
-		QueryParams:    map[string]string{"method": method},
+		QueryParams:    params,
 		Fragment:       fragment,
 		OriginalLine:   line,
 	}
+}
+
+// base64decode tries URL-safe then standard base64 decoding.
+func base64decode(s string) (string, error) {
+	// Try URL-safe unpadded
+	if decoded, err := base64.RawURLEncoding.DecodeString(s); err == nil {
+		return string(decoded), nil
+	}
+	// Try URL-safe padded
+	s2 := s
+	for len(s2)%4 != 0 {
+		s2 += "="
+	}
+	if decoded, err := base64.URLEncoding.DecodeString(s2); err == nil {
+		return string(decoded), nil
+	}
+	// Try standard unpadded
+	if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return string(decoded), nil
+	}
+	// Try standard padded
+	s2 = s
+	for len(s2)%4 != 0 {
+		s2 += "="
+	}
+	decoded, err := base64.StdEncoding.DecodeString(s2)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
+}
+
+// splitHostPort splits host:port handling IPv6 brackets.
+func splitHostPort(hostPort string) (string, int) {
+	host, portStr, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return "", 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return host, 0
+	}
+	return host, port
 }
 
 func normalizeInsecure(params map[string]string) {

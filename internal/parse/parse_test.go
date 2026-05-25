@@ -128,6 +128,47 @@ func TestVMessMissingFields(t *testing.T) {
 	}
 }
 
+func TestSSIP002Base64(t *testing.T) {
+	// SIP002: ss://base64(method:password)@host:port
+	creds := base64.URLEncoding.EncodeToString([]byte("aes-256-gcm:testpass"))
+	line := "ss://" + creds + "@1.2.3.4:8388#test"
+	record := parseSS(line)
+	if record == nil {
+		t.Fatal("expected non-nil record for SIP002 format")
+	}
+	if record.UUIDOrPassword != "testpass" {
+		t.Fatalf("expected password 'testpass', got %q", record.UUIDOrPassword)
+	}
+	if record.QueryParams["method"] != "aes-256-gcm" {
+		t.Fatalf("expected method aes-256-gcm, got %q", record.QueryParams["method"])
+	}
+}
+
+func TestSSPluginParams(t *testing.T) {
+	creds := base64.URLEncoding.EncodeToString([]byte("aes-256-gcm:testpass"))
+	line := "ss://" + creds + "@1.2.3.4:8388/?plugin=obfs-local%3Bobfs-host%3Dexample.com#test"
+	record := parseSS(line)
+	if record == nil {
+		t.Fatal("expected non-nil record")
+	}
+	if record.QueryParams["plugin"] == "" {
+		t.Fatal("expected plugin param to be captured")
+	}
+}
+
+func TestSSLegacyBase64(t *testing.T) {
+	// Legacy: ss://base64(method:password@host:port)#fragment
+	inner := base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:testpass@1.2.3.4:8388"))
+	line := "ss://" + inner + "#test"
+	record := parseSS(line)
+	if record == nil {
+		t.Fatal("expected non-nil record for legacy format")
+	}
+	if record.QueryParams["method"] != "aes-256-gcm" {
+		t.Fatalf("expected method aes-256-gcm, got %q", record.QueryParams["method"])
+	}
+}
+
 func TestVMessV1Rejected(t *testing.T) {
 	vmessJSON := `{"v":"1","ps":"test","add":"example.com","port":443,"id":"uuid"}`
 	encoded := base64.StdEncoding.EncodeToString([]byte(vmessJSON))
