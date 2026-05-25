@@ -298,11 +298,11 @@ func dedupHosts(records []parse.ProxyRecord) []string {
 func handleSub(w http.ResponseWriter, r *http.Request) {
 	v := cache.Load()
 	if v == nil {
-		refreshSF.Do("refresh", func() (interface{}, error) {
-			refreshSubscriptions()
-			return nil, nil
-		})
-		v = cache.Load()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("# subscription not ready yet, retry in 30s\n"))
+		return
 	}
 	data := v.(*cachedData)
 	body := []byte(data.output)
