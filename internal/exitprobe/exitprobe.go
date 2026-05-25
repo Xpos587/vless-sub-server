@@ -164,7 +164,10 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	if err != nil {
 		return &ExitProbeResult{XrayOK: false}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -202,7 +205,10 @@ func (ep *ExitProber) probeCFTrace(ctx context.Context, transport *http.Transpor
 	if err != nil {
 		return &ExitProbeResult{XrayOK: false}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
