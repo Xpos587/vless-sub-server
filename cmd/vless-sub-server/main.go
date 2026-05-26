@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
@@ -31,10 +29,10 @@ type cachedData struct {
 }
 
 var (
-	cache     atomic.Value // stores *cachedData
-	refreshSF singleflight.Group
-	cfg       *config.Config
-	dnsCache  *dns.DNSCache
+	cache      atomic.Value   // stores *cachedData
+	refreshing atomic.Int32   // 0=idle, 1=refreshing
+	cfg        *config.Config
+	dnsCache   *dns.DNSCache
 )
 
 func main() {
@@ -53,21 +51,13 @@ func main() {
 	log.Printf("[server] starting on :%d, refresh every %s", port, refreshInterval)
 
 	// Initial refresh
-	go func() {
-		refreshSF.Do("refresh", func() (interface{}, error) {
-			refreshSubscriptions()
-			return nil, nil
-		})
-	}()
+	triggerRefresh()
 
 	// Periodic refresh
 	ticker := time.NewTicker(refreshInterval)
 	go func() {
 		for range ticker.C {
-			refreshSF.Do("refresh", func() (interface{}, error) {
-				refreshSubscriptions()
-				return nil, nil
-			})
+			triggerRefresh()
 		}
 	}()
 
@@ -283,6 +273,16 @@ func refreshSubscriptions() {
 	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
 }
 
+func triggerRefresh() {
+	if !refreshing.CompareAndSwap(0, 1) {
+		return // already refreshing
+	}
+	go func() {
+		defer refreshing.Store(0)
+		refreshSubscriptions()
+	}()
+}
+
 func dedupHosts(records []parse.ProxyRecord) []string {
 	seen := make(map[string]bool, len(records))
 	var hosts []string
@@ -298,13 +298,24 @@ func dedupHosts(records []parse.ProxyRecord) []string {
 func handleSub(w http.ResponseWriter, r *http.Request) {
 	v := cache.Load()
 	if v == nil {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Retry-After", "30")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("# subscription not ready yet, retry in 30s\n"))
-		return
+		triggerRefresh()
+		select {
+		case <-time.After(5 * time.Second):
+			v = cache.Load()
+		}
+		if v == nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("# initializing...\n"))
+			return
+		}
 	}
+
 	data := v.(*cachedData)
+	if time.Since(data.lastRefresh) > cfg.RefreshInterval {
+		go triggerRefresh()
+	}
 	body := []byte(data.output)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
