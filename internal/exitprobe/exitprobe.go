@@ -357,6 +357,12 @@ func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
 		}
 
 	case parse.VMess:
+		alterId := 0
+		if v, ok := rec.QueryParams["alterId"]; ok && v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				alterId = n
+			}
+		}
 		ob.Settings = map[string]any{
 			"vnext": []map[string]any{
 				{
@@ -366,6 +372,7 @@ func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
 						{
 							"id":       rec.UUIDOrPassword,
 							"security": vmessSecurity(rec),
+							"alterId":  alterId,
 						},
 					},
 				},

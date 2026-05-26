@@ -193,6 +193,8 @@ func parseVMess(line string) *ProxyRecord {
 	params := map[string]string{}
 	if cfg.Net != "" {
 		params["type"] = cfg.Net
+	} else {
+		params["type"] = "tcp"
 	}
 	if cfg.TLS == "tls" {
 		params["security"] = "tls"
@@ -480,7 +482,9 @@ func parseHysteria2(line string) *ProxyRecord {
 		}
 	}
 	normalizeInsecure(params)
-	params["security"] = "tls"
+	if params["security"] == "" {
+		params["security"] = "tls"
+	}
 
 	return &ProxyRecord{
 		Protocol:       Hysteria2,

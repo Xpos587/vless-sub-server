@@ -93,13 +93,21 @@ func reconstructVMess(record parse.ProxyRecord, fragment string) string {
 		"port": record.Port,
 		"id":   record.UUIDOrPassword,
 		"net":  record.QueryParams["type"],
-		"type": record.QueryParams["headerType"],
+		"type": record.QueryParams["type"],
 		"tls":  "",
 		"sni":  record.QueryParams["sni"],
 		"path": record.QueryParams["path"],
 		"host": record.QueryParams["host"],
 	}
+	if v := record.QueryParams["headerType"]; v != "" {
+		vmConfig["headerType"] = v
+	}
 
+	net := record.QueryParams["type"]
+	if net == "" {
+		vmConfig["net"] = "tcp"
+		vmConfig["type"] = "tcp"
+	}
 	if sec := record.QueryParams["security"]; sec == "tls" || sec == "reality" {
 		vmConfig["tls"] = "tls"
 	}

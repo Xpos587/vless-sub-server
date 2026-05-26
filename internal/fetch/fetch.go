@@ -304,9 +304,21 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		if security == "tls" || security == "reality" {
 			vmConfig["tls"] = "tls"
 		}
+		if pbk != "" {
+			vmConfig["pbk"] = pbk
+		}
+		if sid != "" {
+			vmConfig["sid"] = sid
+		}
+		if fp != "" {
+			vmConfig["fp"] = fp
+		}
 		if ws, ok := stream["wsSettings"].(map[string]any); ok {
 			if p, ok := ws["path"].(string); ok {
 				vmConfig["path"] = p
+			}
+			if h, ok := ws["host"].(string); ok && h != "" {
+				vmConfig["host"] = h
 			}
 			if h, ok := ws["headers"].(map[string]any); ok {
 				if host, ok := h["Host"].(string); ok {
@@ -320,6 +332,31 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 			}
 			if h, ok := xs["host"].(string); ok {
 				vmConfig["host"] = h
+			}
+		}
+		if gs, ok := stream["grpcSettings"].(map[string]any); ok {
+			if sn, ok := gs["serviceName"].(string); ok {
+				vmConfig["path"] = sn
+			}
+			if m, ok := gs["multiMode"].(bool); ok && m {
+				vmConfig["type"] = "gun"
+			}
+		}
+		if tc, ok := stream["tcpSettings"].(map[string]any); ok {
+			if h, ok := tc["header"].(map[string]any); ok {
+				if t, ok := h["type"].(string); ok && t == "http" {
+					vmConfig["headerType"] = "http"
+				}
+			}
+		}
+		if ks, ok := stream["kcpSettings"].(map[string]any); ok {
+			if s, ok := ks["seed"].(string); ok {
+				vmConfig["path"] = s
+			}
+			if h, ok := ks["header"].(map[string]any); ok {
+				if t, ok := h["type"].(string); ok && t == "http" {
+					vmConfig["headerType"] = "http"
+				}
 			}
 		}
 
@@ -428,7 +465,7 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 			port = int(v)
 		}
 
-		userInfo := base64.URLEncoding.EncodeToString([]byte(method + ":" + password))
+		userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
 		frag := ""
 		if remark != "" {
 			frag = "#" + url.PathEscape(remark)

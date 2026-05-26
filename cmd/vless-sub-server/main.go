@@ -41,10 +41,7 @@ func main() {
 	cfg = loadConfig()
 	dnsCache = dns.NewDNSCache(cfg.DNSCacheTTL)
 
-	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
-
-	// Apply HWID from env into custom headers
 	config.CustomHeaders["X-Hwid"] = cfg.Hwid
 
 	port := cfg.Port
@@ -52,7 +49,6 @@ func main() {
 
 	log.Printf("[server] starting on :%d, refresh every %s", port, refreshInterval)
 
-	// Initial refresh
 	go func() {
 		refreshSF.Do("refresh", func() (interface{}, error) {
 			refreshSubscriptions()
@@ -60,7 +56,6 @@ func main() {
 		})
 	}()
 
-	// Periodic refresh
 	ticker := time.NewTicker(refreshInterval)
 	go func() {
 		for range ticker.C {
@@ -80,7 +75,6 @@ func main() {
 		Handler: mux,
 	}
 
-	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -144,7 +138,6 @@ func refreshSubscriptions() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Phase 1: Fetch subscriptions
 	fetchResults := fetch.FetchSubscriptions(ctx, cfg.SubscriptionURLs, 15*time.Second)
 	sourcesOK := 0
 	sourcesFailed := 0
@@ -156,7 +149,6 @@ func refreshSubscriptions() {
 		}
 	}
 
-	// Phase 2: Parse
 	var allLines []string
 	for _, r := range fetchResults {
 		allLines = append(allLines, r.Lines...)
@@ -164,7 +156,6 @@ func refreshSubscriptions() {
 	parseResult := parse.ParseAllLines(allLines)
 	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
 
-	// Phase 3: DNS resolve
 	dnsMap := dns.ResolveHosts(ctx, dedupHosts(filtered), 20, cfg.DNSTimeout, dnsCache)
 
 	var resolved []parse.ProxyRecord
@@ -175,25 +166,6 @@ func refreshSubscriptions() {
 	}
 	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(dnsMap))
 
-	// Phase 4: Host-IP geo lookup via ip-api.com batch (for all resolved IPs)
-	hostGeoMap := make(map[string]*geo.GeoInfo)
-	if len(resolved) > 0 {
-		var hostIPs []string
-		seen := make(map[string]bool)
-		for _, r := range resolved {
-			if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-				if !seen[d.IP] {
-					seen[d.IP] = true
-					hostIPs = append(hostIPs, d.IP)
-				}
-			}
-		}
-		if len(hostIPs) > 0 {
-			hostGeoMap = geo.BatchGeoLookup(hostIPs, 10*time.Second)
-		}
-	}
-
-	// Phase 5: Exit-IP probe via Xray (override host geo with exit geo)
 	var geoRecords []struct {
 		Record parse.ProxyRecord
 		Geo    *geo.GeoInfo
@@ -204,51 +176,29 @@ func refreshSubscriptions() {
 	if len(resolved) > 0 {
 		ep := exitprobe.NewExitProber(cfg)
 		if err := ep.StartWithProxies(resolved); err != nil {
-			log.Printf("[refresh] xray start failed: %v, using host-IP geo only", err)
-			for _, r := range resolved {
-				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
-				var geoInfo *geo.GeoInfo
-				if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-					geoInfo = hostGeoMap[d.IP]
-				}
-				if geoInfo != nil {
-					geoAvailable++
-				}
-				geoRecords = append(geoRecords, struct {
-					Record parse.ProxyRecord
-					Geo    *geo.GeoInfo
-					IsLAN  bool
-				}{r, geoInfo, isLAN})
-			}
+			log.Printf("[refresh] xray start failed: %v, skipping probe", err)
 		} else {
 			exitResults := ep.ProbeAll(ctx, resolved)
 			ep.Stop()
 
 			for i, r := range resolved {
+				er, probeOK := exitResults[i]
+				if !probeOK || !er.XrayOK {
+					continue
+				}
 				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
 				var geoInfo *geo.GeoInfo
-				if er, ok := exitResults[i]; ok && er.XrayOK {
-					geoInfo = er.GeoInfo
-					if geoInfo != nil {
-						geoAvailable++
-					} else if er.ExitLoc != "" {
-						geoInfo = &geo.GeoInfo{
-							CountryCode: er.ExitLoc,
-							City:        er.ExitLoc,
-							ISP:         "Unknown",
-							IP:          er.ExitIP,
-						}
-						geoAvailable++
+				geoInfo = er.GeoInfo
+				if geoInfo != nil {
+					geoAvailable++
+				} else if er.ExitLoc != "" {
+					geoInfo = &geo.GeoInfo{
+						CountryCode: er.ExitLoc,
+						City:        er.ExitLoc,
+						ISP:         "Unknown",
+						IP:          er.ExitIP,
 					}
-				}
-				// Fallback: use host-IP geo when xray probe failed
-				if geoInfo == nil {
-					if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-						geoInfo = hostGeoMap[d.IP]
-					}
-					if geoInfo != nil {
-						geoAvailable++
-					}
+					geoAvailable++
 				}
 				geoRecords = append(geoRecords, struct {
 					Record parse.ProxyRecord
@@ -259,7 +209,6 @@ func refreshSubscriptions() {
 		}
 	}
 
-	// Phase 5: Rename
 	renamed := rename.RenameAll(geoRecords)
 
 	totalAlive := len(renamed)
