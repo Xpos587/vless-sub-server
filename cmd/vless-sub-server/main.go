@@ -35,6 +35,7 @@ var (
 	refreshing atomic.Int32   // 0=idle, 1=refreshing
 	cfg        *config.Config
 	dnsCache   *dns.DNSCache
+	geoDB      *geo.GeoIPDB
 )
 
 func main() {
@@ -43,6 +44,14 @@ func main() {
 
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
+
+	// Init GeoIPDB from local .mmdb files
+	if key := os.Getenv("MAXMIND_LICENSE_KEY"); key != "" {
+		if err := geo.AutoDownload(cfg.GeoDBDir, key); err != nil {
+			log.Printf("[geoip] auto-download failed: %v", err)
+		}
+	}
+	geoDB = geo.NewGeoIPDB(cfg.GeoDBDir)
 
 	// Apply HWID from env into custom headers
 	config.CustomHeaders["X-Hwid"] = cfg.Hwid
@@ -115,6 +124,7 @@ func loadConfig() *config.Config {
 	}
 	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "50"))
 	c.GeoDatDir = envOr("GEO_DAT_DIR", "/usr/local/share/xray")
+	c.GeoDBDir = envOr("GEO_DB_DIR", "/usr/local/share/xray")
 	c.Hwid = os.Getenv("HWID")
 	if c.Hwid == "" {
 		log.Fatal("[config] HWID is required")
@@ -176,7 +186,7 @@ func refreshSubscriptions() {
 	geoAvailable := 0
 
 	if len(resolved) > 0 {
-		ep := exitprobe.NewExitProber(cfg)
+		ep := exitprobe.NewExitProber(cfg, geoDB)
 		if err := ep.StartWithProxies(resolved); err != nil {
 			log.Printf("[refresh] xray start failed: %v, skipping probe", err)
 		} else {
