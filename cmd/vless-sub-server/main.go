@@ -87,6 +87,9 @@ func main() {
 	go func() {
 		<-sigCh
 		log.Println("[server] shutting down...")
+		if geoDB != nil {
+			geoDB.Close()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
