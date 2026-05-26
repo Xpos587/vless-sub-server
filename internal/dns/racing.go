@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -15,6 +18,15 @@ import (
 type racerResult struct {
 	ip   string
 	priv bool
+}
+
+var dohClient = &http.Client{
+	Timeout: 3 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     30 * time.Second,
+	},
 }
 
 func resolveRacing(ctx context.Context, host string, timeout time.Duration) (string, bool) {
@@ -41,7 +53,7 @@ func resolveRacing(ctx context.Context, host string, timeout time.Duration) (str
 		wg.Add(1)
 		go func(racer func(context.Context) (string, bool)) {
 			defer wg.Done()
-			if ip, ok := racer(ctx); ok && ip != "" {
+			if ip, found := racer(ctx); found && ip != "" {
 				select {
 				case first <- racerResult{ip: ip, priv: isPrivateIPStr(ip)}:
 				default:
@@ -72,26 +84,33 @@ func resolveMiekg(ctx context.Context, host, addr, network string) (string, bool
 	}
 	for _, ans := range r.Answer {
 		if a, ok := ans.(*dns.A); ok {
-			return a.A.String(), false
+			return a.A.String(), true
 		}
 	}
 	return "", false
 }
 
 func resolveDoH(ctx context.Context, host, dohURL string) (string, bool) {
-	u := fmt.Sprintf("%s?name=%s&type=A", dohURL, host)
+	u := fmt.Sprintf("%s?name=%s&type=A", dohURL, url.QueryEscape(host))
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return "", false
 	}
 	req.Header.Set("Accept", "application/dns-json")
 
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := dohClient.Do(req)
 	if err != nil {
 		return "", false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+
+	if resp.StatusCode != 200 {
+		log.Printf("[dns] DoH %s returned HTTP %d", dohURL, resp.StatusCode)
+		return "", false
+	}
 
 	var dohResp struct {
 		Answer []struct {
@@ -103,7 +122,7 @@ func resolveDoH(ctx context.Context, host, dohURL string) (string, bool) {
 	}
 	for _, a := range dohResp.Answer {
 		if net.ParseIP(a.Data) != nil {
-			return a.Data, false
+			return a.Data, true
 		}
 	}
 	return "", false
