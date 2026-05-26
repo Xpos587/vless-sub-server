@@ -128,6 +128,19 @@ func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord)
 	return results
 }
 
+func tcpReachable(host string, port int, timeout time.Duration) bool {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		addr = fmt.Sprintf("[%s]:%d", host, port)
+	}
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.ProxyRecord) *ExitProbeResult {
 	select {
 	case <-ctx.Done():
@@ -138,6 +151,12 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	if idx >= len(ep.proxyTags) {
 		return &ExitProbeResult{XrayOK: false}
 	}
+
+	// Pre-flight TCP check — skip expensive xray probe if host unreachable
+	if !tcpReachable(record.Host, record.Port, 3*time.Second) {
+		return &ExitProbeResult{XrayOK: false}
+	}
+
 	outboundTag := ep.proxyTags[idx]
 
 	transport := &http.Transport{
