@@ -13,6 +13,7 @@ type Config struct {
 	ExitProbeTimeout time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
 	MaxConcurrent    int           `env:"MAX_CONCURRENT" envDefault:"50"`
 	GeoDatDir        string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
+	GeoDBDir         string        `env:"GEO_DB_DIR" envDefault:"/usr/local/share/xray"`
 	Hwid             string        `env:"HWID,required"`
 }
 

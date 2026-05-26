@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
@@ -25,23 +23,37 @@ import (
 	"github.com/michael/vless-sub-server/internal/rename"
 )
 
+const initWaitTimeout = 5 * time.Second
+
 type cachedData struct {
 	output      string
 	lastRefresh time.Time
 }
 
 var (
-	cache     atomic.Value // stores *cachedData
-	refreshSF singleflight.Group
-	cfg       *config.Config
-	dnsCache  *dns.DNSCache
+	cache      atomic.Value   // stores *cachedData
+	refreshing atomic.Int32   // 0=idle, 1=refreshing
+	cfg        *config.Config
+	dnsCache   *dns.DNSCache
+	geoDB      *geo.GeoIPDB
 )
 
 func main() {
 	cfg = loadConfig()
 	dnsCache = dns.NewDNSCache(cfg.DNSCacheTTL)
 
+	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
+
+	// Init GeoIPDB from local .mmdb files
+	if key := os.Getenv("MAXMIND_LICENSE_KEY"); key != "" {
+		if err := geo.AutoDownload(cfg.GeoDBDir, key); err != nil {
+			log.Printf("[geoip] auto-download failed: %v", err)
+		}
+	}
+	geoDB = geo.NewGeoIPDB(cfg.GeoDBDir)
+
+	// Apply HWID from env into custom headers
 	config.CustomHeaders["X-Hwid"] = cfg.Hwid
 
 	port := cfg.Port
@@ -49,20 +61,14 @@ func main() {
 
 	log.Printf("[server] starting on :%d, refresh every %s", port, refreshInterval)
 
-	go func() {
-		refreshSF.Do("refresh", func() (interface{}, error) {
-			refreshSubscriptions()
-			return nil, nil
-		})
-	}()
+	// Initial refresh
+	triggerRefresh()
 
+	// Periodic refresh
 	ticker := time.NewTicker(refreshInterval)
 	go func() {
 		for range ticker.C {
-			refreshSF.Do("refresh", func() (interface{}, error) {
-				refreshSubscriptions()
-				return nil, nil
-			})
+			triggerRefresh()
 		}
 	}()
 
@@ -75,11 +81,15 @@ func main() {
 		Handler: mux,
 	}
 
+	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		log.Println("[server] shutting down...")
+		if geoDB != nil {
+			geoDB.Close()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
@@ -117,6 +127,7 @@ func loadConfig() *config.Config {
 	}
 	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "50"))
 	c.GeoDatDir = envOr("GEO_DAT_DIR", "/usr/local/share/xray")
+	c.GeoDBDir = envOr("GEO_DB_DIR", "/usr/local/share/xray")
 	c.Hwid = os.Getenv("HWID")
 	if c.Hwid == "" {
 		log.Fatal("[config] HWID is required")
@@ -138,6 +149,7 @@ func refreshSubscriptions() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	// Phase 1: Fetch subscriptions
 	fetchResults := fetch.FetchSubscriptions(ctx, cfg.SubscriptionURLs, 15*time.Second)
 	sourcesOK := 0
 	sourcesFailed := 0
@@ -149,6 +161,7 @@ func refreshSubscriptions() {
 		}
 	}
 
+	// Phase 2: Parse
 	var allLines []string
 	for _, r := range fetchResults {
 		allLines = append(allLines, r.Lines...)
@@ -156,6 +169,7 @@ func refreshSubscriptions() {
 	parseResult := parse.ParseAllLines(allLines)
 	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
 
+	// Phase 3: DNS resolve
 	dnsMap := dns.ResolveHosts(ctx, dedupHosts(filtered), 20, cfg.DNSTimeout, dnsCache)
 
 	var resolved []parse.ProxyRecord
@@ -166,6 +180,7 @@ func refreshSubscriptions() {
 	}
 	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(dnsMap))
 
+	// Phase 4: Exit-IP probe via Xray (exit-IP geo only, no host-IP fallback)
 	var geoRecords []struct {
 		Record parse.ProxyRecord
 		Geo    *geo.GeoInfo
@@ -174,7 +189,7 @@ func refreshSubscriptions() {
 	geoAvailable := 0
 
 	if len(resolved) > 0 {
-		ep := exitprobe.NewExitProber(cfg)
+		ep := exitprobe.NewExitProber(cfg, geoDB)
 		if err := ep.StartWithProxies(resolved); err != nil {
 			log.Printf("[refresh] xray start failed: %v, skipping probe", err)
 		} else {
@@ -209,6 +224,7 @@ func refreshSubscriptions() {
 		}
 	}
 
+	// Phase 5: Rename
 	renamed := rename.RenameAll(geoRecords)
 
 	totalAlive := len(renamed)
@@ -232,6 +248,16 @@ func refreshSubscriptions() {
 	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
 }
 
+func triggerRefresh() {
+	if !refreshing.CompareAndSwap(0, 1) {
+		return // already refreshing
+	}
+	go func() {
+		defer refreshing.Store(0)
+		refreshSubscriptions()
+	}()
+}
+
 func dedupHosts(records []parse.ProxyRecord) []string {
 	seen := make(map[string]bool, len(records))
 	var hosts []string
@@ -247,13 +273,24 @@ func dedupHosts(records []parse.ProxyRecord) []string {
 func handleSub(w http.ResponseWriter, r *http.Request) {
 	v := cache.Load()
 	if v == nil {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Retry-After", "30")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("# subscription not ready yet, retry in 30s\n"))
-		return
+		triggerRefresh()
+		select {
+		case <-time.After(initWaitTimeout):
+			v = cache.Load()
+		}
+		if v == nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("# initializing...\n"))
+			return
+		}
 	}
+
 	data := v.(*cachedData)
+	if time.Since(data.lastRefresh) > cfg.RefreshInterval {
+		triggerRefresh()
+	}
 	body := []byte(data.output)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

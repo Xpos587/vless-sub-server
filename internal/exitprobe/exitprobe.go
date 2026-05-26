@@ -34,15 +34,17 @@ type ExitProbeResult struct {
 
 type ExitProber struct {
 	cfg       *config.Config
+	geoDB     *geo.GeoIPDB
 	instance  *core.Instance
 	proxyTags []string // proxy index -> outbound tag
 	transport *http.Transport
 	mu        sync.Mutex
 }
 
-func NewExitProber(cfg *config.Config) *ExitProber {
+func NewExitProber(cfg *config.Config, geoDB *geo.GeoIPDB) *ExitProber {
 	return &ExitProber{
 		cfg:       cfg,
+		geoDB:     geoDB,
 		proxyTags: nil,
 		transport: &http.Transport{
 			MaxIdleConns:          100,
@@ -123,9 +125,20 @@ func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord)
 	}
 	g.Wait()
 
-	// Batch geo lookup for all successful exit IPs
-	ep.batchGeoLookup(results)
 	return results
+}
+
+func tcpReachable(host string, port int, timeout time.Duration) bool {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		addr = fmt.Sprintf("[%s]:%d", host, port)
+	}
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.ProxyRecord) *ExitProbeResult {
@@ -138,6 +151,12 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	if idx >= len(ep.proxyTags) {
 		return &ExitProbeResult{XrayOK: false}
 	}
+
+	// Pre-flight TCP check — skip expensive xray probe if host unreachable
+	if !tcpReachable(record.Host, record.Port, 3*time.Second) {
+		return &ExitProbeResult{XrayOK: false}
+	}
+
 	outboundTag := ep.proxyTags[idx]
 
 	transport := &http.Transport{
@@ -179,17 +198,25 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		return ep.probeCFTrace(ctx, transport)
 	}
 
-	return &ExitProbeResult{
+	result := &ExitProbeResult{
 		ExitIP:  ipResp.IP,
 		ExitLoc: ipResp.CountryCode,
 		XrayOK:  true,
-		GeoInfo: &geo.GeoInfo{
+	}
+
+	if ep.geoDB != nil {
+		result.GeoInfo = ep.geoDB.Lookup(ipResp.IP)
+	}
+	if result.GeoInfo == nil {
+		result.GeoInfo = &geo.GeoInfo{
 			CountryCode: ipResp.CountryCode,
 			City:        ipResp.City,
 			ISP:         ipResp.Connection.ISP,
 			IP:          ipResp.IP,
-		},
+		}
 	}
+
+	return result
 }
 
 func (ep *ExitProber) probeCFTrace(ctx context.Context, transport *http.Transport) *ExitProbeResult {
@@ -227,73 +254,20 @@ func (ep *ExitProber) probeCFTrace(ctx context.Context, transport *http.Transpor
 	if result.ExitIP == "" {
 		return &ExitProbeResult{XrayOK: false}
 	}
+
+	if ep.geoDB != nil {
+		result.GeoInfo = ep.geoDB.Lookup(result.ExitIP)
+	}
+	if result.GeoInfo == nil && result.ExitLoc != "" {
+		result.GeoInfo = &geo.GeoInfo{
+			CountryCode: result.ExitLoc,
+			City:        result.ExitLoc,
+			ISP:         "Unknown",
+			IP:          result.ExitIP,
+		}
+	}
+
 	return result
-}
-
-func (ep *ExitProber) batchGeoLookup(results map[int]*ExitProbeResult) {
-	// Collect IPs that need geo lookup (those without geo from ipwho.is)
-	var ips []string
-	ipToIdx := map[string][]int{}
-	for idx, r := range results {
-		if r.XrayOK && r.GeoInfo == nil && r.ExitIP != "" {
-			if _, exists := ipToIdx[r.ExitIP]; !exists {
-				ips = append(ips, r.ExitIP)
-			}
-			ipToIdx[r.ExitIP] = append(ipToIdx[r.ExitIP], idx)
-		}
-	}
-
-	if len(ips) == 0 {
-		return
-	}
-
-	// ip-api.com batch
-	payload, _ := json.Marshal(ips)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post("http://ip-api.com/batch?fields=status,message,query,countryCode,city,isp",
-		"application/json", bytes.NewReader(payload))
-	if err != nil {
-		// Fallback: use CF trace loc only
-		for _, idx := range ipToIdx {
-			for _, i := range idx {
-				if results[i] != nil && results[i].XrayOK {
-					results[i].GeoInfo = &geo.GeoInfo{
-						CountryCode: results[i].ExitLoc,
-						City:        results[i].ExitLoc,
-						ISP:         "Unknown",
-						IP:          results[i].ExitIP,
-					}
-				}
-			}
-		}
-		return
-	}
-	defer resp.Body.Close()
-
-	var entries []struct {
-		Status      string `json:"status"`
-		Query       string `json:"query"`
-		CountryCode string `json:"countryCode"`
-		City        string `json:"city"`
-		ISP         string `json:"isp"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
-		return
-	}
-
-	for _, e := range entries {
-		if e.Status == "success" && e.CountryCode != "" {
-			info := &geo.GeoInfo{
-				CountryCode: e.CountryCode,
-				City:        e.City,
-				ISP:         e.ISP,
-				IP:          e.Query,
-			}
-			for _, idx := range ipToIdx[e.Query] {
-				results[idx].GeoInfo = info
-			}
-		}
-	}
 }
 
 type xrayOutbound struct {
