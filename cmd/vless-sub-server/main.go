@@ -165,25 +165,7 @@ func refreshSubscriptions() {
 	}
 	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(dnsMap))
 
-	// Phase 4: Host-IP geo lookup via ip-api.com batch (for all resolved IPs)
-	hostGeoMap := make(map[string]*geo.GeoInfo)
-	if len(resolved) > 0 {
-		var hostIPs []string
-		seen := make(map[string]bool)
-		for _, r := range resolved {
-			if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-				if !seen[d.IP] {
-					seen[d.IP] = true
-					hostIPs = append(hostIPs, d.IP)
-				}
-			}
-		}
-		if len(hostIPs) > 0 {
-			hostGeoMap = geo.BatchGeoLookup(hostIPs, 10*time.Second)
-		}
-	}
-
-	// Phase 5: Exit-IP probe via Xray (override host geo with exit geo)
+	// Phase 4: Exit-IP probe via Xray (exit-IP geo only, no host-IP fallback)
 	var geoRecords []struct {
 		Record parse.ProxyRecord
 		Geo    *geo.GeoInfo
@@ -194,51 +176,29 @@ func refreshSubscriptions() {
 	if len(resolved) > 0 {
 		ep := exitprobe.NewExitProber(cfg)
 		if err := ep.StartWithProxies(resolved); err != nil {
-			log.Printf("[refresh] xray start failed: %v, using host-IP geo only", err)
-			for _, r := range resolved {
-				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
-				var geoInfo *geo.GeoInfo
-				if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-					geoInfo = hostGeoMap[d.IP]
-				}
-				if geoInfo != nil {
-					geoAvailable++
-				}
-				geoRecords = append(geoRecords, struct {
-					Record parse.ProxyRecord
-					Geo    *geo.GeoInfo
-					IsLAN  bool
-				}{r, geoInfo, isLAN})
-			}
+			log.Printf("[refresh] xray start failed: %v, skipping probe", err)
 		} else {
 			exitResults := ep.ProbeAll(ctx, resolved)
 			ep.Stop()
 
 			for i, r := range resolved {
+				er, probeOK := exitResults[i]
+				if !probeOK || !er.XrayOK {
+					continue
+				}
 				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
 				var geoInfo *geo.GeoInfo
-				if er, ok := exitResults[i]; ok && er.XrayOK {
-					geoInfo = er.GeoInfo
-					if geoInfo != nil {
-						geoAvailable++
-					} else if er.ExitLoc != "" {
-						geoInfo = &geo.GeoInfo{
-							CountryCode: er.ExitLoc,
-							City:        er.ExitLoc,
-							ISP:         "Unknown",
-							IP:          er.ExitIP,
-						}
-						geoAvailable++
+				geoInfo = er.GeoInfo
+				if geoInfo != nil {
+					geoAvailable++
+				} else if er.ExitLoc != "" {
+					geoInfo = &geo.GeoInfo{
+						CountryCode: er.ExitLoc,
+						City:        er.ExitLoc,
+						ISP:         "Unknown",
+						IP:          er.ExitIP,
 					}
-				}
-				// Fallback: use host-IP geo when xray probe failed
-				if geoInfo == nil {
-					if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-						geoInfo = hostGeoMap[d.IP]
-					}
-					if geoInfo != nil {
-						geoAvailable++
-					}
+					geoAvailable++
 				}
 				geoRecords = append(geoRecords, struct {
 					Record parse.ProxyRecord
