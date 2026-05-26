@@ -23,6 +23,8 @@ import (
 	"github.com/michael/vless-sub-server/internal/rename"
 )
 
+const initWaitTimeout = 5 * time.Second
+
 type cachedData struct {
 	output      string
 	lastRefresh time.Time
@@ -260,7 +262,7 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		triggerRefresh()
 		select {
-		case <-time.After(5 * time.Second):
+		case <-time.After(initWaitTimeout):
 			v = cache.Load()
 		}
 		if v == nil {
@@ -274,7 +276,7 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 
 	data := v.(*cachedData)
 	if time.Since(data.lastRefresh) > cfg.RefreshInterval {
-		go triggerRefresh()
+		triggerRefresh()
 	}
 	body := []byte(data.output)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
