@@ -4,7 +4,6 @@ go 1.26
 
 require (
 	github.com/miekg/dns v1.1.72
-	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/xtls/xray-core v1.260327.0
 	golang.org/x/sync v0.20.0
 )

@@ -7,13 +7,18 @@ type GeoInfo struct {
 	IP          string
 }
 
-// ipwho.is response
-type IPWhoisResponse struct {
-	IP          string `json:"ip"`
-	Success     bool   `json:"success"`
-	CountryCode string `json:"country_code"`
-	City        string `json:"city"`
-	Connection  struct {
-		ISP string `json:"isp"`
-	} `json:"connection"`
+// api.ip.sb/geoip response
+type IPSbResponse struct {
+	IP           string  `json:"ip"`
+	CountryCode  string  `json:"country_code"`
+	Country      string  `json:"country"`
+	City         string  `json:"city"`
+	Region       string  `json:"region"`
+	ISP          string  `json:"isp"`
+	Organization string  `json:"organization"`
+	ASN          int     `json:"asn"`
+	ASNOrg       string  `json:"asn_organization"`
+	Latitude     float64 `json:"latitude"`
+	Longitude    float64 `json:"longitude"`
+	Timezone     string  `json:"timezone"`
 }
