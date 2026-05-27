@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,6 +28,7 @@ const initWaitTimeout = 5 * time.Second
 
 type cachedData struct {
 	output      string
+	jsonOutput  []byte
 	lastRefresh time.Time
 }
 
@@ -221,7 +223,7 @@ func refreshSubscriptions() {
 	totalAlive := len(renamed)
 	totalDead := len(resolved) - totalAlive
 
-	output := format.FormatOutput(renamed, format.FormatMetadata{
+	fmeta := format.FormatMetadata{
 		TotalFetched:    len(allLines),
 		TotalParsed:     len(filtered),
 		TotalSkipped:    parseResult.Skipped,
@@ -232,9 +234,12 @@ func refreshSubscriptions() {
 		SourcesFailed:   sourcesFailed,
 		GeoAvailable:    geoAvailable,
 		GeoTotal:        len(probed),
-	})
+	}
 
-	cache.Store(&cachedData{output: output, lastRefresh: time.Now()})
+	output := format.FormatOutput(renamed, fmeta)
+	jsonOutput := format.FormatXrayJSON(renamed, fmeta)
+
+	cache.Store(&cachedData{output: output, jsonOutput: jsonOutput, lastRefresh: time.Now()})
 	dnsCache.Purge()
 	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
 }
@@ -287,12 +292,32 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	if time.Since(data.lastRefresh) > cfg.RefreshInterval {
 		triggerRefresh()
 	}
-	body := []byte(data.output)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	w.Header().Set("X-Last-Refresh", data.lastRefresh.Format(time.RFC3339))
-	w.Write(body)
+
+	formatParam := r.URL.Query().Get("format")
+	switch formatParam {
+	case "", "url":
+		body := []byte(data.output)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.Header().Set("X-Last-Refresh", data.lastRefresh.Format(time.RFC3339))
+		w.Write(body)
+
+	case "json":
+		body := data.jsonOutput
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.Header().Set("X-Last-Refresh", data.lastRefresh.Format(time.RFC3339))
+		w.Write(body)
+
+	default:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("unsupported format: %s, use 'url' or 'json'", formatParam),
+		})
+	}
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {

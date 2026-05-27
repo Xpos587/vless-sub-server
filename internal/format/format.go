@@ -108,6 +108,9 @@ func reconstructVMess(record parse.ProxyRecord, fragment string) string {
 		vmConfig["net"] = "tcp"
 		vmConfig["type"] = "tcp"
 	}
+	if v := record.QueryParams["headerType"]; v != "" {
+		vmConfig["type"] = v
+	}
 	if sec := record.QueryParams["security"]; sec == "tls" || sec == "reality" {
 		vmConfig["tls"] = "tls"
 	}
