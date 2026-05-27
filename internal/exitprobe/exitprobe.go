@@ -25,26 +25,26 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const geoAPIURL = "https://api.ip.sb/geoip"
+
 type ExitProbeResult struct {
-	ExitIP   string
-	ExitLoc  string
-	GeoInfo  *geo.GeoInfo
-	XrayOK   bool
+	ExitIP  string
+	ExitLoc string
+	GeoInfo *geo.GeoInfo
+	XrayOK  bool
 }
 
 type ExitProber struct {
 	cfg       *config.Config
-	geoDB     *geo.GeoIPDB
 	instance  *core.Instance
-	proxyTags []string // proxy index -> outbound tag
+	proxyTags []string
 	transport *http.Transport
 	mu        sync.Mutex
 }
 
-func NewExitProber(cfg *config.Config, geoDB *geo.GeoIPDB) *ExitProber {
+func NewExitProber(cfg *config.Config) *ExitProber {
 	return &ExitProber{
 		cfg:       cfg,
-		geoDB:     geoDB,
 		proxyTags: nil,
 		transport: &http.Transport{
 			MaxIdleConns:          100,
@@ -128,19 +128,6 @@ func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord)
 	return results
 }
 
-func tcpReachable(host string, port int, timeout time.Duration) bool {
-	addr := fmt.Sprintf("%s:%d", host, port)
-	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-		addr = fmt.Sprintf("[%s]:%d", host, port)
-	}
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
-
 func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.ProxyRecord) *ExitProbeResult {
 	select {
 	case <-ctx.Done():
@@ -149,11 +136,6 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	}
 
 	if idx >= len(ep.proxyTags) {
-		return &ExitProbeResult{XrayOK: false}
-	}
-
-	// Pre-flight TCP check — skip expensive xray probe if host unreachable
-	if !tcpReachable(record.Host, record.Port, 3*time.Second) {
 		return &ExitProbeResult{XrayOK: false}
 	}
 
@@ -173,7 +155,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	}
 	client := &http.Client{Transport: transport}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://ipwho.is/", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", geoAPIURL, nil)
 	if err != nil {
 		return &ExitProbeResult{XrayOK: false}
 	}
@@ -188,98 +170,52 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		resp.Body.Close()
 	}()
 
+	if resp.StatusCode != 200 {
+		return &ExitProbeResult{XrayOK: false}
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return &ExitProbeResult{XrayOK: false}
 	}
 
-	var ipResp geo.IPWhoisResponse
-	if err := json.Unmarshal(body, &ipResp); err != nil || !ipResp.Success {
-		return ep.probeCFTrace(ctx, transport)
+	var ipResp geo.IPSbResponse
+	if err := json.Unmarshal(body, &ipResp); err != nil || ipResp.IP == "" || ipResp.CountryCode == "" {
+		return &ExitProbeResult{XrayOK: false}
 	}
 
-	result := &ExitProbeResult{
+	city := ipResp.City
+	if city == "" {
+		city = ipResp.Region
+	}
+	isp := ipResp.ISP
+	if isp == "" {
+		isp = ipResp.Organization
+	}
+
+	return &ExitProbeResult{
 		ExitIP:  ipResp.IP,
 		ExitLoc: ipResp.CountryCode,
 		XrayOK:  true,
-	}
-
-	if ep.geoDB != nil {
-		result.GeoInfo = ep.geoDB.Lookup(ipResp.IP)
-	}
-	if result.GeoInfo == nil {
-		result.GeoInfo = &geo.GeoInfo{
+		GeoInfo: &geo.GeoInfo{
 			CountryCode: ipResp.CountryCode,
-			City:        ipResp.City,
-			ISP:         ipResp.Connection.ISP,
+			City:        city,
+			ISP:         isp,
 			IP:          ipResp.IP,
-		}
+		},
 	}
-
-	return result
-}
-
-func (ep *ExitProber) probeCFTrace(ctx context.Context, transport *http.Transport) *ExitProbeResult {
-	client := &http.Client{Transport: transport}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://speed.cloudflare.com/cdn-cgi/trace", nil)
-	if err != nil {
-		return &ExitProbeResult{XrayOK: false}
-	}
-	req.Header.Set("User-Agent", "vless-sub-server/1.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return &ExitProbeResult{XrayOK: false}
-	}
-	defer func() {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return &ExitProbeResult{XrayOK: false}
-	}
-
-	result := &ExitProbeResult{XrayOK: true}
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "ip=") {
-			result.ExitIP = strings.TrimPrefix(line, "ip=")
-		} else if strings.HasPrefix(line, "loc=") {
-			result.ExitLoc = strings.TrimPrefix(line, "loc=")
-		}
-	}
-	if result.ExitIP == "" {
-		return &ExitProbeResult{XrayOK: false}
-	}
-
-	if ep.geoDB != nil {
-		result.GeoInfo = ep.geoDB.Lookup(result.ExitIP)
-	}
-	if result.GeoInfo == nil && result.ExitLoc != "" {
-		result.GeoInfo = &geo.GeoInfo{
-			CountryCode: result.ExitLoc,
-			City:        result.ExitLoc,
-			ISP:         "Unknown",
-			IP:          result.ExitIP,
-		}
-	}
-
-	return result
 }
 
 type xrayOutbound struct {
-	Tag            string          `json:"tag"`
-	Protocol       string          `json:"protocol"`
-	Settings       map[string]any  `json:"settings"`
-	StreamSettings map[string]any  `json:"streamSettings,omitempty"`
+	Tag            string         `json:"tag"`
+	Protocol       string         `json:"protocol"`
+	Settings       map[string]any `json:"settings"`
+	StreamSettings map[string]any `json:"streamSettings,omitempty"`
 }
 
 type xrayDialConfig struct {
-	Log       map[string]any    `json:"log"`
-	Outbounds []xrayOutbound    `json:"outbounds"`
+	Log       map[string]any `json:"log"`
+	Outbounds []xrayOutbound `json:"outbounds"`
 }
 
 func buildOutboundOnlyConfig(records []parse.ProxyRecord) []byte {
@@ -415,7 +351,6 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 		"network":  network,
 		"security": security,
 	}
-
 
 	if security == "reality" {
 		rs := map[string]any{}

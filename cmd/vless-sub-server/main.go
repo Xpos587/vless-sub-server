@@ -35,7 +35,6 @@ var (
 	refreshing atomic.Int32   // 0=idle, 1=refreshing
 	cfg        *config.Config
 	dnsCache   *dns.DNSCache
-	geoDB      *geo.GeoIPDB
 )
 
 func main() {
@@ -44,14 +43,6 @@ func main() {
 
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
-
-	// Init GeoIPDB from local .mmdb files
-	if key := os.Getenv("MAXMIND_LICENSE_KEY"); key != "" {
-		if err := geo.AutoDownload(cfg.GeoDBDir, key); err != nil {
-			log.Printf("[geoip] auto-download failed: %v", err)
-		}
-	}
-	geoDB = geo.NewGeoIPDB(cfg.GeoDBDir)
 
 	// Apply HWID from env into custom headers
 	config.CustomHeaders["X-Hwid"] = cfg.Hwid
@@ -87,9 +78,6 @@ func main() {
 	go func() {
 		<-sigCh
 		log.Println("[server] shutting down...")
-		if geoDB != nil {
-			geoDB.Close()
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
@@ -127,7 +115,6 @@ func loadConfig() *config.Config {
 	}
 	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "50"))
 	c.GeoDatDir = envOr("GEO_DAT_DIR", "/usr/local/share/xray")
-	c.GeoDBDir = envOr("GEO_DB_DIR", "/usr/local/share/xray")
 	c.Hwid = os.Getenv("HWID")
 	if c.Hwid == "" {
 		log.Fatal("[config] HWID is required")
@@ -178,9 +165,21 @@ func refreshSubscriptions() {
 			resolved = append(resolved, r)
 		}
 	}
-	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(dnsMap))
+	// Filter out XHTTP transport — xray-core panic on nil Config (upstream #5997)
+	var probed []parse.ProxyRecord
+	for _, r := range resolved {
+		if r.QueryParams["type"] != "xhttp" {
+			probed = append(probed, r)
+		}
+	}
+	xhttpSkipped := len(resolved) - len(probed)
+	if xhttpSkipped > 0 {
+		log.Printf("[refresh] skipped %d xhttp proxies (xray-core #5997)", xhttpSkipped)
+	}
 
-	// Phase 4: Exit-IP probe via Xray (exit-IP geo only, no host-IP fallback)
+	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d probed=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(probed), len(dnsMap))
+
+	// Phase 4: Exit-IP probe via Xray
 	var geoRecords []struct {
 		Record parse.ProxyRecord
 		Geo    *geo.GeoInfo
@@ -188,31 +187,22 @@ func refreshSubscriptions() {
 	}
 	geoAvailable := 0
 
-	if len(resolved) > 0 {
-		ep := exitprobe.NewExitProber(cfg, geoDB)
-		if err := ep.StartWithProxies(resolved); err != nil {
+	if len(probed) > 0 {
+		ep := exitprobe.NewExitProber(cfg)
+		if err := ep.StartWithProxies(probed); err != nil {
 			log.Printf("[refresh] xray start failed: %v, skipping probe", err)
 		} else {
-			exitResults := ep.ProbeAll(ctx, resolved)
+			exitResults := ep.ProbeAll(ctx, probed)
 			ep.Stop()
 
-			for i, r := range resolved {
+			for i, r := range probed {
 				er, probeOK := exitResults[i]
 				if !probeOK || !er.XrayOK {
 					continue
 				}
 				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
-				var geoInfo *geo.GeoInfo
-				geoInfo = er.GeoInfo
+				geoInfo := er.GeoInfo
 				if geoInfo != nil {
-					geoAvailable++
-				} else if er.ExitLoc != "" {
-					geoInfo = &geo.GeoInfo{
-						CountryCode: er.ExitLoc,
-						City:        er.ExitLoc,
-						ISP:         "Unknown",
-						IP:          er.ExitIP,
-					}
 					geoAvailable++
 				}
 				geoRecords = append(geoRecords, struct {
@@ -221,6 +211,7 @@ func refreshSubscriptions() {
 					IsLAN  bool
 				}{r, geoInfo, isLAN})
 			}
+			log.Printf("[refresh] xray-verified=%d", len(geoRecords))
 		}
 	}
 
@@ -240,7 +231,7 @@ func refreshSubscriptions() {
 		SourcesOK:       sourcesOK,
 		SourcesFailed:   sourcesFailed,
 		GeoAvailable:    geoAvailable,
-		GeoTotal:        len(resolved),
+		GeoTotal:        len(probed),
 	})
 
 	cache.Store(&cachedData{output: output, lastRefresh: time.Now()})
@@ -254,6 +245,11 @@ func triggerRefresh() {
 	}
 	go func() {
 		defer refreshing.Store(0)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[refresh] panic recovered: %v", r)
+			}
+		}()
 		refreshSubscriptions()
 	}()
 }
