@@ -43,7 +43,7 @@ v2rayNG detects xray JSON config via `string.contains("inbounds" && "outbounds" 
 xray-core v1.260327.0 supports PQ encryption (`mlkem768x25519plus`). The `encryption` query param **must be preserved** when building xray outbound config — never hardcode `"none"`. If encryption is absent/empty/`"none"`, fallback to `"none"`. This is handled by `vlessEncryption()` in `exitprobe.go`.
 
 ### xray-core as library
-xray-core is imported as a Go library, not a subprocess. The `core.Instance` is created from JSON config built by `buildCheckConfig()`. Each proxy gets a dedicated SOCKS5 inbound on sequential ports starting at `SOCKS_START_PORT`. Geo dat files (`geosite.dat`, `geoip.dat`) must be at `GEO_DAT_DIR` (set `XRAY_LOCATION_ASSET`).
+xray-core is imported as a Go library, not a subprocess. The `core.Instance` is created from JSON config built by `buildCheckConfig()`. Geo dat files (`geosite.dat`, `geoip.dat`) must be at `GEO_DAT_DIR` (set `XRAY_LOCATION_ASSET`).
 
 ### Output URL reconstruction
 `format.go` reconstructs proxy URLs from `ProxyRecord` + renamed fragment. Query params are preserved as-is. The `encryption` field in output URLs must reflect the original value (not xray's `"none"` probing override).
@@ -77,7 +77,6 @@ internal/
 | `DNS_TIMEOUT` | `2s` | DNS resolve timeout |
 | `EXIT_PROBE_TIMEOUT` | `12s` | Exit-IP probe timeout |
 | `MAX_CONCURRENT` | `10` | Concurrency limit for probes |
-| `SOCKS_START_PORT` | `10801` | First SOCKS5 port for xray |
 | `GEO_DAT_DIR` | `/usr/local/share/xray` | Xray geo dat files |
 
 ## Endpoints

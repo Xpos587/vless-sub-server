@@ -96,7 +96,6 @@ fetch → parse → DNS → TCP probe → exit-IP probe (xray) → rename → fo
 | `DNS_TIMEOUT` | `2s` | DNS resolve timeout |
 | `EXIT_PROBE_TIMEOUT` | `12s` | Exit-IP probe timeout |
 | `MAX_CONCURRENT` | `50` | Concurrency limit |
-| `SOCKS_START_PORT` | `10801` | First SOCKS5 port for xray |
 | `GEO_DAT_DIR` | `/usr/local/share/xray` | Xray geo dat files |
 | `DNS_CACHE_TTL` | `10m` | DNS cache TTL |
 
