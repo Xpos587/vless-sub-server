@@ -32,9 +32,12 @@ fetch → parse → DNS → TCP probe → exit-IP probe (xray) → rename → fo
 4. **TCP probe** — dial test, collect latency
 5. **exit-IP probe** — xray-core in-process: SOCKS5 inbound per proxy → HTTP GET ipwho.is → fallback CF trace + ip-api.com batch
 6. **rename** — `🇩🇪 Frankfurt (ISP)` format, deduplicate names
-7. **format** — header with stats + base subscription output
+7. **format** — header with stats + base subscription output; `?format=json` → per-proxy xray-core config array
 
 ## Critical Constraints
+
+### JSON format must include `inbounds`
+v2rayNG detects xray JSON config via `string.contains("inbounds" && "outbounds" && "routing")`. Output **must** include `inbounds` key or v2rayNG silently skips JSON parsing and falls back to base64/line parsing. Each proxy gets its own config object in the array with `remarks`, `inbounds`, `outbounds`, `routing`.
 
 ### VLESS encryption field
 xray-core v1.260327.0 supports PQ encryption (`mlkem768x25519plus`). The `encryption` query param **must be preserved** when building xray outbound config — never hardcode `"none"`. If encryption is absent/empty/`"none"`, fallback to `"none"`. This is handled by `vlessEncryption()` in `exitprobe.go`.
@@ -59,6 +62,7 @@ internal/
   geo/geo.go                   — GeoInfo/IPWhoisResponse types
   rename/rename.go             — rename with flag+city+ISP, dedup
   format/format.go             — output formatting with header + URL reconstruction
+  format/xrayjson.go           — per-proxy xray-core JSON config array (v2rayNG format)
 ```
 
 ## Environment Variables
@@ -79,4 +83,20 @@ internal/
 ## Endpoints
 
 - `GET /sub` — subscription output (base64 lines with header)
+- `GET /sub?format=json` — JSON array of xray-core configs (v2rayNG/MahsaNG compatible)
 - `GET /health` — returns `ok`
+
+## JSON Format (`?format=json`)
+
+Returns a JSON array where each element is a complete xray-core config for one proxy. v2rayNG detects this by checking `string.contains("inbounds") && string.contains("outbounds") && string.contains("routing")`, then parses as `Array<V2rayConfig>` — each element becomes a separate profile with `remarks` as the name.
+
+Each config includes:
+- `remarks` — proxy name (e.g. `🇩🇪 Frankfurt (ISP)`)
+- `inbounds` — socks (port 10800+i) + http (port 11800+i)
+- `outbounds` — [proxy-N, warp-out-N, direct, block] with WARP chain via `sockopt.dialerProxy`
+- `routing` — block ads, direct for RU/private IPs
+- `log`, `dns`
+
+MahsaNG supports JSON config only via manual import (clipboard), not subscription auto-update.
+
+## Critical Constraints

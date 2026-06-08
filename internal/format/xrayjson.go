@@ -18,43 +18,82 @@ const (
 	warpAddress6  = "2606:4700:110:87f3:6e1e:cb18:8fb0:8d33/128"
 )
 
-// FormatXrayJSON produces a complete xray-core JSON config with outbounds and routing rules.
+// FormatXrayJSON produces a JSON array of complete xray-core configs, one per proxy.
+// Each config includes: remarks, inbounds (socks+http), outbounds (proxy+warp+direct+block), routing.
+// v2rayNG detects JSON config by checking string contains "inbounds" && "outbounds" && "routing".
+// It then parses as Array<V2rayConfig> and creates a separate profile per element.
 func FormatXrayJSON(entries []rename.RenamedEntry, meta FormatMetadata) []byte {
 	if len(entries) == 0 {
-		result, _ := json.Marshal(map[string]any{
-			"routing":   buildRoutingRules(),
-			"outbounds": []any{},
-		})
+		result, _ := json.Marshal([]any{})
 		return result
 	}
 
-	outbounds := make([]any, 0, len(entries)*2+2)
+	configs := make([]map[string]any, 0, len(entries))
 
 	for i, e := range entries {
 		ob := buildOutbound(e, i+1)
 		if ob == nil {
 			continue
 		}
-		outbounds = append(outbounds, ob)
-		outbounds = append(outbounds, buildWarpOutbound(i+1))
+
+		config := map[string]any{
+			"remarks":  e.RenamedFragment,
+			"log":      map[string]any{"loglevel": "warning"},
+			"inbounds":  buildInbounds(i + 1),
+			"outbounds": buildPerProxyOutbounds(ob, i+1),
+			"routing":   buildRoutingRules(),
+			"dns":      map[string]any{},
+		}
+		configs = append(configs, config)
 	}
 
-	outbounds = append(outbounds, map[string]any{
-		"protocol": "freedom",
-		"tag":      "direct",
-	})
-	outbounds = append(outbounds, map[string]any{
-		"protocol": "blackhole",
-		"tag":      "block",
-	})
-
-	config := map[string]any{
-		"routing":   buildRoutingRules(),
-		"outbounds": outbounds,
-	}
-
-	result, _ := json.MarshalIndent(config, "", "  ")
+	result, _ := json.MarshalIndent(configs, "", "  ")
 	return result
+}
+
+// buildInbounds creates socks and http inbounds for a single proxy config.
+// Each proxy gets unique ports so configs can coexist.
+func buildInbounds(index int) []any {
+	socksPort := 10800 + index
+	httpPort := 10800 + 1000 + index
+	return []any{
+		map[string]any{
+			"tag":      "socks",
+			"port":     socksPort,
+			"protocol": "socks",
+			"settings": map[string]any{
+				"auth": "noauth",
+				"udp":  true,
+			},
+			"sniffing": map[string]any{
+				"enabled":      true,
+				"destOverride": []string{"http", "tls"},
+			},
+		},
+		map[string]any{
+			"tag":      "http",
+			"port":     httpPort,
+			"protocol": "http",
+			"settings": map[string]any{},
+		},
+	}
+}
+
+// buildPerProxyOutbounds creates the outbound chain for one proxy:
+// [proxy-N, warp-out-N, direct, block]
+func buildPerProxyOutbounds(proxyOb map[string]any, index int) []any {
+	return []any{
+		proxyOb,
+		buildWarpOutbound(index),
+		map[string]any{
+			"protocol": "freedom",
+			"tag":      "direct",
+		},
+		map[string]any{
+			"protocol": "blackhole",
+			"tag":      "block",
+		},
+	}
 }
 
 func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
@@ -73,8 +112,8 @@ func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
 			enc = "none"
 		}
 		user := map[string]any{
-			"id":          r.UUIDOrPassword,
-			"encryption":  enc,
+			"id":         r.UUIDOrPassword,
+			"encryption": enc,
 		}
 		if flow := qp["flow"]; flow != "" {
 			user["flow"] = flow

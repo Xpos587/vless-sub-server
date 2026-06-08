@@ -8,6 +8,20 @@ import (
 	"github.com/michael/vless-sub-server/internal/rename"
 )
 
+// parseArray unmarshals the JSON array output and returns the first config.
+// For single-entry tests, there should be exactly 1 config in the array.
+func parseSingleConfig(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+	var configs []map[string]any
+	if err := json.Unmarshal(data, &configs); err != nil {
+		t.Fatalf("invalid JSON array: %v", err)
+	}
+	if len(configs) != 1 {
+		t.Fatalf("expected 1 config, got %d", len(configs))
+	}
+	return configs[0]
+}
+
 func TestFormatXrayJSON_VLESS_Reality(t *testing.T) {
 	entries := []rename.RenamedEntry{
 		{
@@ -32,9 +46,17 @@ func TestFormatXrayJSON_VLESS_Reality(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{TotalAlive: 1})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+	config := parseSingleConfig(t, result)
+
+	// Check remarks
+	if config["remarks"] != "DE Frankfurt (ISP)" {
+		t.Errorf("expected remarks 'DE Frankfurt (ISP)', got %v", config["remarks"])
+	}
+
+	// Check inbounds exist
+	inbounds := config["inbounds"].([]any)
+	if len(inbounds) != 2 {
+		t.Fatalf("expected 2 inbounds (socks+http), got %d", len(inbounds))
 	}
 
 	// Check outbounds count: proxy-1 + warp-out-1 + direct + block = 4
@@ -130,10 +152,7 @@ func TestFormatXrayJSON_VMess_WS_TLS(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	config := parseSingleConfig(t, result)
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
 	if proxy["protocol"] != "vmess" {
@@ -184,10 +203,7 @@ func TestFormatXrayJSON_Trojan(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	config := parseSingleConfig(t, result)
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
 	if proxy["protocol"] != "trojan" {
@@ -216,10 +232,7 @@ func TestFormatXrayJSON_SS(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	config := parseSingleConfig(t, result)
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
 	if proxy["protocol"] != "shadowsocks" {
@@ -240,9 +253,9 @@ func TestFormatXrayJSON_Hysteria2(t *testing.T) {
 				Port:           443,
 				UUIDOrPassword: "hy2-auth",
 				QueryParams: map[string]string{
-					"security": "tls",
-					"sni":      "hy2.example.com",
-					"obfs":     "salamander",
+					"security":      "tls",
+					"sni":           "hy2.example.com",
+					"obfs":          "salamander",
 					"obfs-password": "obfs-pass",
 				},
 			},
@@ -251,10 +264,7 @@ func TestFormatXrayJSON_Hysteria2(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	config := parseSingleConfig(t, result)
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
 	if proxy["protocol"] != "hysteria2" {
@@ -287,36 +297,42 @@ func TestFormatXrayJSON_MultipleProxies(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+	var configs []map[string]any
+	if err := json.Unmarshal(result, &configs); err != nil {
+		t.Fatalf("invalid JSON array: %v", err)
+	}
+	if len(configs) != 2 {
+		t.Fatalf("expected 2 configs, got %d", len(configs))
 	}
 
-	outbounds := config["outbounds"].([]any)
-	// proxy-1 + warp-out-1 + proxy-2 + warp-out-2 + direct + block = 6
-	if len(outbounds) != 6 {
-		t.Fatalf("expected 6 outbounds, got %d", len(outbounds))
+	// First config
+	c1 := configs[0]
+	if c1["remarks"] != "Proxy 1" {
+		t.Errorf("first config remarks should be 'Proxy 1', got %v", c1["remarks"])
+	}
+	ob1 := c1["outbounds"].([]any)
+	if ob1[0].(map[string]any)["tag"] != "proxy-1" {
+		t.Errorf("first config first outbound tag should be proxy-1")
+	}
+	if ob1[1].(map[string]any)["tag"] != "warp-out-1" {
+		t.Errorf("first config second outbound tag should be warp-out-1")
 	}
 
-	// First proxy
-	if outbounds[0].(map[string]any)["tag"] != "proxy-1" {
-		t.Errorf("first outbound tag should be proxy-1")
+	// Second config
+	c2 := configs[1]
+	if c2["remarks"] != "Proxy 2" {
+		t.Errorf("second config remarks should be 'Proxy 2', got %v", c2["remarks"])
 	}
-	// First warp
-	if outbounds[1].(map[string]any)["tag"] != "warp-out-1" {
-		t.Errorf("second outbound tag should be warp-out-1")
+	ob2 := c2["outbounds"].([]any)
+	if ob2[0].(map[string]any)["tag"] != "proxy-2" {
+		t.Errorf("second config first outbound tag should be proxy-2")
 	}
-	// Second proxy
-	if outbounds[2].(map[string]any)["tag"] != "proxy-2" {
-		t.Errorf("third outbound tag should be proxy-2")
-	}
-	// Second warp
-	if outbounds[3].(map[string]any)["tag"] != "warp-out-2" {
-		t.Errorf("fourth outbound tag should be warp-out-2")
+	if ob2[1].(map[string]any)["tag"] != "warp-out-2" {
+		t.Errorf("second config second outbound tag should be warp-out-2")
 	}
 
 	// WARP dialerProxy for proxy-2
-	warp2SS := outbounds[3].(map[string]any)["streamSettings"].(map[string]any)
+	warp2SS := ob2[1].(map[string]any)["streamSettings"].(map[string]any)
 	sockopt2 := warp2SS["sockopt"].(map[string]any)
 	if sockopt2["dialerProxy"] != "proxy-2" {
 		t.Errorf("expected dialerProxy proxy-2, got %v", sockopt2["dialerProxy"])
@@ -325,14 +341,12 @@ func TestFormatXrayJSON_MultipleProxies(t *testing.T) {
 
 func TestFormatXrayJSON_Empty(t *testing.T) {
 	result := FormatXrayJSON(nil, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+	var configs []map[string]any
+	if err := json.Unmarshal(result, &configs); err != nil {
+		t.Fatalf("invalid JSON array: %v", err)
 	}
-
-	outbounds := config["outbounds"].([]any)
-	if len(outbounds) != 0 {
-		t.Errorf("expected 0 outbounds for empty input, got %d", len(outbounds))
+	if len(configs) != 0 {
+		t.Errorf("expected 0 configs for empty input, got %d", len(configs))
 	}
 }
 
@@ -359,10 +373,7 @@ func TestFormatXrayJSON_PQEncryption(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	config := parseSingleConfig(t, result)
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
 	user := proxy["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
@@ -392,10 +403,7 @@ func TestFormatXrayJSON_GRPC(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	config := parseSingleConfig(t, result)
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
 	ss := proxy["streamSettings"].(map[string]any)
@@ -426,10 +434,7 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 	}
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
-	var config map[string]any
-	if err := json.Unmarshal(result, &config); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	config := parseSingleConfig(t, result)
 
 	rules := config["routing"].(map[string]any)["rules"].([]any)
 
@@ -458,4 +463,121 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 	if len(suffixes) != 1 || suffixes[0] != ".kg" {
 		t.Errorf("expected domain_suffix [.kg], got %v", suffixes)
 	}
+}
+
+func TestFormatXrayJSON_InboundsPresent(t *testing.T) {
+	entries := []rename.RenamedEntry{
+		{
+			Record: parse.ProxyRecord{
+				Protocol:       parse.VLESS,
+				Host:           "1.2.3.4",
+				Port:           443,
+				UUIDOrPassword: "test-uuid",
+				QueryParams:    map[string]string{"type": "tcp", "security": "reality", "sni": "a.com", "fp": "chrome", "pbk": "p", "sid": "s"},
+			},
+			RenamedFragment: "Test Inbounds",
+		},
+	}
+
+	result := FormatXrayJSON(entries, FormatMetadata{})
+	config := parseSingleConfig(t, result)
+
+	// Verify inbounds exist with socks and http
+	inbounds := config["inbounds"].([]any)
+	if len(inbounds) != 2 {
+		t.Fatalf("expected 2 inbounds, got %d", len(inbounds))
+	}
+	socks := inbounds[0].(map[string]any)
+	if socks["protocol"] != "socks" {
+		t.Errorf("expected socks inbound, got %v", socks["protocol"])
+	}
+	http := inbounds[1].(map[string]any)
+	if http["protocol"] != "http" {
+		t.Errorf("expected http inbound, got %v", http["protocol"])
+	}
+
+	// Verify unique ports per config index
+	socksPort := socks["port"].(float64)
+	httpPort := http["port"].(float64)
+	if socksPort != 10801 {
+		t.Errorf("expected socks port 10801, got %v", socksPort)
+	}
+	if httpPort != 11801 {
+		t.Errorf("expected http port 11801, got %v", httpPort)
+	}
+}
+
+func TestFormatXrayJSON_RemarksField(t *testing.T) {
+	entries := []rename.RenamedEntry{
+		{
+			Record: parse.ProxyRecord{
+				Protocol:       parse.VLESS,
+				Host:           "1.2.3.4",
+				Port:           443,
+				UUIDOrPassword: "uuid",
+				QueryParams:    map[string]string{"type": "tcp", "security": "reality", "sni": "a.com", "fp": "chrome", "pbk": "p", "sid": "s"},
+			},
+			RenamedFragment: "🇩🇪 Frankfurt (Hetzner)",
+		},
+	}
+
+	result := FormatXrayJSON(entries, FormatMetadata{})
+	config := parseSingleConfig(t, result)
+
+	if config["remarks"] != "🇩🇪 Frankfurt (Hetzner)" {
+		t.Errorf("expected remarks '🇩🇪 Frankfurt (Hetzner)', got %v", config["remarks"])
+	}
+}
+
+func TestFormatXrayJSON_ArrayFormatForV2rayNG(t *testing.T) {
+	// Verify the output is a JSON array that contains "inbounds" string
+	// so v2rayNG's string-contains detection works
+	entries := []rename.RenamedEntry{
+		{
+			Record: parse.ProxyRecord{
+				Protocol:       parse.VLESS,
+				Host:           "1.2.3.4",
+				Port:           443,
+				UUIDOrPassword: "uuid",
+				QueryParams:    map[string]string{"type": "tcp", "security": "reality", "sni": "a.com", "fp": "chrome", "pbk": "p", "sid": "s"},
+			},
+			RenamedFragment: "Server A",
+		},
+	}
+
+	result := FormatXrayJSON(entries, FormatMetadata{})
+	resultStr := string(result)
+
+	// v2rayNG checks: server.contains("inbounds") && server.contains("outbounds") && server.contains("routing")
+	if !containsAll(resultStr, "inbounds", "outbounds", "routing") {
+		t.Error("output must contain 'inbounds', 'outbounds', 'routing' for v2rayNG detection")
+	}
+
+	// Must be a JSON array (starts with '[')
+	var arr []any
+	if err := json.Unmarshal(result, &arr); err != nil {
+		t.Fatalf("output must be valid JSON array: %v", err)
+	}
+}
+
+func containsAll(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if !jsonOrPlainContains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
+
+func jsonOrPlainContains(s, sub string) bool {
+	return len(s) >= len(sub) && containsStr(s, sub)
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
