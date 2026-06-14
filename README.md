@@ -55,8 +55,8 @@ Returns a JSON array where each element is a complete xray-core config for one p
       {"tag": "http",  "port": 11801, "protocol": "http", ...}
     ],
     "outbounds": [
-      {"tag": "proxy-1", "protocol": "vless", ...},
       {"tag": "warp-out-1", "protocol": "wireguard", "streamSettings": {"sockopt": {"dialerProxy": "proxy-1"}}, ...},
+      {"tag": "proxy-1", "protocol": "vless", ...},
       {"tag": "direct", "protocol": "freedom"},
       {"tag": "block", "protocol": "blackhole"}
     ],
@@ -66,7 +66,7 @@ Returns a JSON array where each element is a complete xray-core config for one p
 ]
 ```
 
-Each proxy gets unique SOCKS/HTTP ports, its own WARP chain outbound, and the full routing config. v2rayNG imports each element as a separate profile. MahsaNG supports this format via manual import.
+Traffic flows through `warp-out-N` by default. WARP connects to its endpoint through `proxy-N` via `dialerProxy`, creating the chain: proxy → WARP → destination. v2rayNG imports each element as a separate profile. MahsaNG supports this format via manual import.
 
 ## Pipeline
 

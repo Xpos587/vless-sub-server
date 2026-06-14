@@ -80,11 +80,13 @@ func buildInbounds(index int) []any {
 }
 
 // buildPerProxyOutbounds creates the outbound chain for one proxy:
-// [proxy-N, warp-out-N, direct, block]
+// [warp-out-N, proxy-N, direct, block]
+// Traffic default route → warp-out-N. WARP endpoint connects through
+// proxy-N via dialerProxy, forming the chain: proxy → WARP → destination.
 func buildPerProxyOutbounds(proxyOb map[string]any, index int) []any {
 	return []any{
-		proxyOb,
 		buildWarpOutbound(index),
+		proxyOb,
 		map[string]any{
 			"protocol": "freedom",
 			"tag":      "direct",

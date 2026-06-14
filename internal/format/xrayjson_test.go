@@ -59,14 +59,28 @@ func TestFormatXrayJSON_VLESS_Reality(t *testing.T) {
 		t.Fatalf("expected 2 inbounds (socks+http), got %d", len(inbounds))
 	}
 
-	// Check outbounds count: proxy-1 + warp-out-1 + direct + block = 4
+	// Check outbounds count: warp-out-1 + proxy-1 + direct + block = 4
 	outbounds := config["outbounds"].([]any)
 	if len(outbounds) != 4 {
 		t.Fatalf("expected 4 outbounds, got %d", len(outbounds))
 	}
 
+	// Check warp-out-1 (default outbound)
+	warp := outbounds[0].(map[string]any)
+	if warp["protocol"] != "wireguard" {
+		t.Errorf("expected wireguard default outbound, got %v", warp["protocol"])
+	}
+	if warp["tag"] != "warp-out-1" {
+		t.Errorf("expected tag warp-out-1, got %v", warp["tag"])
+	}
+	warpSS := warp["streamSettings"].(map[string]any)
+	sockopt := warpSS["sockopt"].(map[string]any)
+	if sockopt["dialerProxy"] != "proxy-1" {
+		t.Errorf("expected dialerProxy proxy-1, got %v", sockopt["dialerProxy"])
+	}
+
 	// Check proxy-1 outbound
-	proxy := outbounds[0].(map[string]any)
+	proxy := outbounds[1].(map[string]any)
 	if proxy["protocol"] != "vless" {
 		t.Errorf("expected protocol vless, got %v", proxy["protocol"])
 	}
@@ -102,20 +116,6 @@ func TestFormatXrayJSON_VLESS_Reality(t *testing.T) {
 	}
 	if rs["shortId"] != "test-sid" {
 		t.Errorf("expected shortId test-sid, got %v", rs["shortId"])
-	}
-
-	// Check warp-out-1
-	warp := outbounds[1].(map[string]any)
-	if warp["protocol"] != "wireguard" {
-		t.Errorf("expected protocol wireguard, got %v", warp["protocol"])
-	}
-	if warp["tag"] != "warp-out-1" {
-		t.Errorf("expected tag warp-out-1, got %v", warp["tag"])
-	}
-	warpSS := warp["streamSettings"].(map[string]any)
-	sockopt := warpSS["sockopt"].(map[string]any)
-	if sockopt["dialerProxy"] != "proxy-1" {
-		t.Errorf("expected dialerProxy proxy-1, got %v", sockopt["dialerProxy"])
 	}
 
 	// Check routing
@@ -154,7 +154,7 @@ func TestFormatXrayJSON_VMess_WS_TLS(t *testing.T) {
 	result := FormatXrayJSON(entries, FormatMetadata{})
 	config := parseSingleConfig(t, result)
 
-	proxy := config["outbounds"].([]any)[0].(map[string]any)
+	proxy := config["outbounds"].([]any)[1].(map[string]any)
 	if proxy["protocol"] != "vmess" {
 		t.Errorf("expected protocol vmess, got %v", proxy["protocol"])
 	}
@@ -205,7 +205,7 @@ func TestFormatXrayJSON_Trojan(t *testing.T) {
 	result := FormatXrayJSON(entries, FormatMetadata{})
 	config := parseSingleConfig(t, result)
 
-	proxy := config["outbounds"].([]any)[0].(map[string]any)
+	proxy := config["outbounds"].([]any)[1].(map[string]any)
 	if proxy["protocol"] != "trojan" {
 		t.Errorf("expected protocol trojan, got %v", proxy["protocol"])
 	}
@@ -234,7 +234,7 @@ func TestFormatXrayJSON_SS(t *testing.T) {
 	result := FormatXrayJSON(entries, FormatMetadata{})
 	config := parseSingleConfig(t, result)
 
-	proxy := config["outbounds"].([]any)[0].(map[string]any)
+	proxy := config["outbounds"].([]any)[1].(map[string]any)
 	if proxy["protocol"] != "shadowsocks" {
 		t.Errorf("expected protocol shadowsocks, got %v", proxy["protocol"])
 	}
@@ -266,7 +266,7 @@ func TestFormatXrayJSON_Hysteria2(t *testing.T) {
 	result := FormatXrayJSON(entries, FormatMetadata{})
 	config := parseSingleConfig(t, result)
 
-	proxy := config["outbounds"].([]any)[0].(map[string]any)
+	proxy := config["outbounds"].([]any)[1].(map[string]any)
 	if proxy["protocol"] != "hysteria2" {
 		t.Errorf("expected protocol hysteria2, got %v", proxy["protocol"])
 	}
@@ -311,11 +311,11 @@ func TestFormatXrayJSON_MultipleProxies(t *testing.T) {
 		t.Errorf("first config remarks should be 'Proxy 1', got %v", c1["remarks"])
 	}
 	ob1 := c1["outbounds"].([]any)
-	if ob1[0].(map[string]any)["tag"] != "proxy-1" {
-		t.Errorf("first config first outbound tag should be proxy-1")
+	if ob1[0].(map[string]any)["tag"] != "warp-out-1" {
+		t.Errorf("first config first outbound tag should be warp-out-1")
 	}
-	if ob1[1].(map[string]any)["tag"] != "warp-out-1" {
-		t.Errorf("first config second outbound tag should be warp-out-1")
+	if ob1[1].(map[string]any)["tag"] != "proxy-1" {
+		t.Errorf("first config second outbound tag should be proxy-1")
 	}
 
 	// Second config
@@ -324,15 +324,15 @@ func TestFormatXrayJSON_MultipleProxies(t *testing.T) {
 		t.Errorf("second config remarks should be 'Proxy 2', got %v", c2["remarks"])
 	}
 	ob2 := c2["outbounds"].([]any)
-	if ob2[0].(map[string]any)["tag"] != "proxy-2" {
-		t.Errorf("second config first outbound tag should be proxy-2")
+	if ob2[0].(map[string]any)["tag"] != "warp-out-2" {
+		t.Errorf("second config first outbound tag should be warp-out-2")
 	}
-	if ob2[1].(map[string]any)["tag"] != "warp-out-2" {
-		t.Errorf("second config second outbound tag should be warp-out-2")
+	if ob2[1].(map[string]any)["tag"] != "proxy-2" {
+		t.Errorf("second config second outbound tag should be proxy-2")
 	}
 
 	// WARP dialerProxy for proxy-2
-	warp2SS := ob2[1].(map[string]any)["streamSettings"].(map[string]any)
+	warp2SS := ob2[0].(map[string]any)["streamSettings"].(map[string]any)
 	sockopt2 := warp2SS["sockopt"].(map[string]any)
 	if sockopt2["dialerProxy"] != "proxy-2" {
 		t.Errorf("expected dialerProxy proxy-2, got %v", sockopt2["dialerProxy"])
@@ -375,7 +375,7 @@ func TestFormatXrayJSON_PQEncryption(t *testing.T) {
 	result := FormatXrayJSON(entries, FormatMetadata{})
 	config := parseSingleConfig(t, result)
 
-	proxy := config["outbounds"].([]any)[0].(map[string]any)
+	proxy := config["outbounds"].([]any)[1].(map[string]any)
 	user := proxy["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
 	if user["encryption"] != "mlkem768x25519plus" {
 		t.Errorf("PQ encryption must be preserved, got %v", user["encryption"])
@@ -405,7 +405,7 @@ func TestFormatXrayJSON_GRPC(t *testing.T) {
 	result := FormatXrayJSON(entries, FormatMetadata{})
 	config := parseSingleConfig(t, result)
 
-	proxy := config["outbounds"].([]any)[0].(map[string]any)
+	proxy := config["outbounds"].([]any)[1].(map[string]any)
 	ss := proxy["streamSettings"].(map[string]any)
 	if ss["network"] != "grpc" {
 		t.Errorf("expected network grpc, got %v", ss["network"])
@@ -481,6 +481,12 @@ func TestFormatXrayJSON_InboundsPresent(t *testing.T) {
 
 	result := FormatXrayJSON(entries, FormatMetadata{})
 	config := parseSingleConfig(t, result)
+
+	// Verify default outbound is WARP
+	outbounds := config["outbounds"].([]any)
+	if outbounds[0].(map[string]any)["protocol"] != "wireguard" {
+		t.Errorf("expected first outbound to be wireguard default")
+	}
 
 	// Verify inbounds exist with socks and http
 	inbounds := config["inbounds"].([]any)
