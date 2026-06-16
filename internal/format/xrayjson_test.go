@@ -275,8 +275,8 @@ func TestFormatXrayJSON_Hysteria2(t *testing.T) {
 	config := parseSingleConfig(t, result)
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
-	if proxy["protocol"] != "hysteria2" {
-		t.Errorf("expected protocol hysteria2, got %v", proxy["protocol"])
+	if proxy["protocol"] != "hysteria" {
+		t.Errorf("expected protocol hysteria (hysteria2), got %v", proxy["protocol"])
 	}
 }
 

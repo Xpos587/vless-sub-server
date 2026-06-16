@@ -174,7 +174,7 @@ func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
 		}
 
 	case parse.Hysteria2:
-		ob["protocol"] = "hysteria2"
+		ob["protocol"] = "hysteria"
 		ob["settings"] = map[string]any{
 			"servers": []any{map[string]any{
 				"address":  r.Host,
