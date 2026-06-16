@@ -176,19 +176,17 @@ func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
 	case parse.Hysteria2:
 		ob["protocol"] = "hysteria"
 		ob["settings"] = map[string]any{
-			"servers": []any{map[string]any{
-				"address":  r.Host,
-				"port":     r.Port,
-				"password": r.UUIDOrPassword,
-			}},
-			"version": 2,
+			"address": r.Host,
+			"port":    r.Port,
+			"password": r.UUIDOrPassword,
+			"version":  2,
 		}
 
 	default:
 		return nil
 	}
 
-	ss := buildStreamSettings(qp)
+	ss := buildStreamSettings(r)
 	if ss != nil {
 		ob["streamSettings"] = ss
 	}
@@ -196,14 +194,57 @@ func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
 	return ob
 }
 
-func buildStreamSettings(qp map[string]string) map[string]any {
+func buildStreamSettings(r parse.ProxyRecord) map[string]any {
+	qp := r.QueryParams
 	security := qp["security"]
 	network := qp["type"]
 
-	// Hysteria2: skip streamSettings entirely
-	if network == "quic" {
-		return nil
+	// Hysteria2: network="quic" in URL, xray uses "hysteria"
+	if r.Protocol == parse.Hysteria2 {
+		if network == "" || network == "quic" {
+			network = "hysteria"
+		}
+		if security == "" {
+			security = "tls"
+		}
+		ss := map[string]any{
+			"network":  "hysteria",
+			"security": "tls",
+		}
+		hy := map[string]any{
+			"version": 2,
+			"auth":     r.UUIDOrPassword,
+		}
+		if obfs := qp["obfs"]; obfs != "" {
+			hy["obfs"] = obfs
+		}
+		if obfsPass := qp["obfs-password"]; obfsPass != "" {
+			hy["obfsPassword"] = obfsPass
+		}
+		ss["hysteriaSettings"] = hy
+
+		if sni := qp["sni"]; sni != "" {
+			ts := map[string]any{"serverName": sni}
+			if alpn := qp["alpn"]; alpn != "" {
+				ts["alpn"] = strings.Split(alpn, ",")
+			}
+			ss["tlsSettings"] = ts
+		}
+		if fp := qp["fp"]; fp != "" {
+			if _, ok := ss["tlsSettings"]; !ok {
+				ss["tlsSettings"] = map[string]any{}
+			}
+			ss["tlsSettings"].(map[string]any)["fingerprint"] = fp
+		}
+		if qp["insecure"] == "1" {
+			if _, ok := ss["tlsSettings"]; !ok {
+				ss["tlsSettings"] = map[string]any{}
+			}
+			ss["tlsSettings"].(map[string]any)["allowInsecure"] = true
+		}
+		return ss
 	}
+
 	if network == "" {
 		network = "tcp"
 	}
