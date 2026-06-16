@@ -25,7 +25,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const geoAPIURL = "http://ip-api.com/json?fields=status,country,countryCode,city,region,isp,org,query"
+const geoAPIURL = "https://ipwho.is/"
 
 type ExitProbeResult struct {
 	ExitIP  string
@@ -179,8 +179,8 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		return &ExitProbeResult{XrayOK: false}
 	}
 
-	var ipResp geo.IPAPIResponse
-	if err := json.Unmarshal(body, &ipResp); err != nil || ipResp.Status != "success" || ipResp.Query == "" {
+	var ipResp geo.IPWhoisResponse
+	if err := json.Unmarshal(body, &ipResp); err != nil || !ipResp.Success || ipResp.IP == "" {
 		return &ExitProbeResult{XrayOK: false}
 	}
 
@@ -188,20 +188,20 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	if city == "" {
 		city = ipResp.Region
 	}
-	isp := ipResp.ISP
+	isp := ipResp.Connection.ISP
 	if isp == "" {
-		isp = ipResp.Org
+		isp = ipResp.Connection.Org
 	}
 
 	return &ExitProbeResult{
-		ExitIP:  ipResp.Query,
+		ExitIP:  ipResp.IP,
 		ExitLoc: ipResp.CountryCode,
 		XrayOK:  true,
 		GeoInfo: &geo.GeoInfo{
 			CountryCode: ipResp.CountryCode,
 			City:        city,
 			ISP:         isp,
-			IP:          ipResp.Query,
+			IP:          ipResp.IP,
 		},
 	}
 }
