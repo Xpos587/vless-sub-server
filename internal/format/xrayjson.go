@@ -181,6 +181,7 @@ func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
 				"port":     r.Port,
 				"password": r.UUIDOrPassword,
 			}},
+			"version": 2,
 		}
 
 	default:
