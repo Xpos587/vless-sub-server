@@ -261,6 +261,7 @@ func TestFormatXrayJSON_Hysteria2(t *testing.T) {
 				Port:           443,
 				UUIDOrPassword: "hy2-auth",
 				QueryParams: map[string]string{
+					"type":          "quic",
 					"security":      "tls",
 					"sni":           "hy2.example.com",
 					"obfs":          "salamander",
@@ -276,7 +277,53 @@ func TestFormatXrayJSON_Hysteria2(t *testing.T) {
 
 	proxy := config["outbounds"].([]any)[0].(map[string]any)
 	if proxy["protocol"] != "hysteria" {
-		t.Errorf("expected protocol hysteria (hysteria2), got %v", proxy["protocol"])
+		t.Fatalf("expected protocol hysteria (hysteria2), got %v", proxy["protocol"])
+	}
+
+	// Settings must use flat format (not servers array)
+	settings := proxy["settings"].(map[string]any)
+	if settings["address"] != "11.0.0.1" {
+		t.Errorf("expected address 11.0.0.1, got %v", settings["address"])
+	}
+	if settings["port"] != float64(443) {
+		t.Errorf("expected port 443, got %v", settings["port"])
+	}
+	if settings["password"] != "hy2-auth" {
+		t.Errorf("expected password hy2-auth, got %v", settings["password"])
+	}
+	if settings["version"] != float64(2) {
+		t.Errorf("expected version 2, got %v", settings["version"])
+	}
+	// Must NOT have "servers" key
+	if _, ok := settings["servers"]; ok {
+		t.Error("hysteria settings must NOT use servers array format")
+	}
+
+	// streamSettings must exist with hysteriaSettings
+	ss := proxy["streamSettings"].(map[string]any)
+	if ss["network"] != "hysteria" {
+		t.Errorf("expected network hysteria, got %v", ss["network"])
+	}
+	if ss["security"] != "tls" {
+		t.Errorf("expected security tls, got %v", ss["security"])
+	}
+	hy := ss["hysteriaSettings"].(map[string]any)
+	if hy["version"] != float64(2) {
+		t.Errorf("expected hysteriaSettings version 2, got %v", hy["version"])
+	}
+	if hy["auth"] != "hy2-auth" {
+		t.Errorf("expected hysteriaSettings auth hy2-auth, got %v", hy["auth"])
+	}
+	if hy["obfs"] != "salamander" {
+		t.Errorf("expected obfs salamander, got %v", hy["obfs"])
+	}
+	if hy["obfsPassword"] != "obfs-pass" {
+		t.Errorf("expected obfsPassword obfs-pass, got %v", hy["obfsPassword"])
+	}
+	// TLS settings must have SNI
+	tlsSettings := ss["tlsSettings"].(map[string]any)
+	if tlsSettings["serverName"] != "hy2.example.com" {
+		t.Errorf("expected serverName hy2.example.com, got %v", tlsSettings["serverName"])
 	}
 }
 
