@@ -91,12 +91,14 @@ Returns a JSON array where each element is a complete xray-core config for one p
 
 Each config includes:
 - `remarks` — proxy name (e.g. `🇩🇪 Frankfurt (ISP)`)
-- `inbounds` — socks (port 10800+i) + http (port 11800+i)
-- `outbounds` — [warp-out-N, proxy-N, direct, block] with WARP chain via `sockopt.dialerProxy`
-- `routing` — block ads, direct for RU/private IPs
+- `inbounds` — socks (port 10808) + http (port 10809)
+- `outbounds` — [proxy-N, warp-out-N, direct, block] with WARP chain via `sockopt.dialerProxy`
+- `routing` — block ads, direct for RU/private IPs, catch-all → warp-out-N (port 0-65535)
 - `log`, `dns`
 
-Traffic flow: inbound → default route to `warp-out-N` → WARP endpoint connects through `proxy-N` via `dialerProxy` → WARP tunnel → destination.
+**Why proxy-N first in outbounds:** v2rayNG's `getProxyOutbound()` returns the first outbound with a known protocol (vless, vmess, trojan, etc.). If wireguard were first, v2rayNG would show the WARP config as the "proxy" instead of the actual proxy.
+
+**Traffic flow:** inbound → routing catch-all rule sends to `warp-out-N` → WARP endpoint connects through `proxy-N` via `dialerProxy` → WARP tunnel → destination.
 
 MahsaNG supports JSON config only via manual import (clipboard), not subscription auto-update.
 

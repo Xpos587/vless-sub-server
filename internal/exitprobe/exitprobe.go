@@ -25,7 +25,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const geoAPIURL = "https://api.ip.sb/geoip"
+const geoAPIURL = "http://ip-api.com/json?fields=status,country,countryCode,city,region,isp,org,query"
 
 type ExitProbeResult struct {
 	ExitIP  string
@@ -179,8 +179,8 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		return &ExitProbeResult{XrayOK: false}
 	}
 
-	var ipResp geo.IPSbResponse
-	if err := json.Unmarshal(body, &ipResp); err != nil || ipResp.IP == "" || ipResp.CountryCode == "" {
+	var ipResp geo.IPAPIResponse
+	if err := json.Unmarshal(body, &ipResp); err != nil || ipResp.Status != "success" || ipResp.Query == "" {
 		return &ExitProbeResult{XrayOK: false}
 	}
 
@@ -190,18 +190,18 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	}
 	isp := ipResp.ISP
 	if isp == "" {
-		isp = ipResp.Organization
+		isp = ipResp.Org
 	}
 
 	return &ExitProbeResult{
-		ExitIP:  ipResp.IP,
+		ExitIP:  ipResp.Query,
 		ExitLoc: ipResp.CountryCode,
 		XrayOK:  true,
 		GeoInfo: &geo.GeoInfo{
 			CountryCode: ipResp.CountryCode,
 			City:        city,
 			ISP:         isp,
-			IP:          ipResp.IP,
+			IP:          ipResp.Query,
 		},
 	}
 }

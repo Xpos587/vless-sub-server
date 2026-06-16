@@ -7,18 +7,15 @@ type GeoInfo struct {
 	IP          string
 }
 
-// api.ip.sb/geoip response
-type IPSbResponse struct {
-	IP           string  `json:"ip"`
-	CountryCode  string  `json:"country_code"`
-	Country      string  `json:"country"`
-	City         string  `json:"city"`
-	Region       string  `json:"region"`
-	ISP          string  `json:"isp"`
-	Organization string  `json:"organization"`
-	ASN          int     `json:"asn"`
-	ASNOrg       string  `json:"asn_organization"`
-	Latitude     float64 `json:"latitude"`
-	Longitude    float64 `json:"longitude"`
-	Timezone     string  `json:"timezone"`
+// ip-api.com response
+type IPAPIResponse struct {
+	Status      string `json:"status"`
+	Country     string `json:"country"`
+	CountryCode string `json:"countryCode"`
+	Region      string `json:"region"`
+	City        string `json:"city"`
+	ISP         string `json:"isp"`
+	Org         string `json:"org"`
+	Query       string `json:"query"`
 }
+

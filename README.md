@@ -51,22 +51,24 @@ Returns a JSON array where each element is a complete xray-core config for one p
     "remarks": "🇩🇪 Frankfurt (Hetzner)",
     "log": {"loglevel": "warning"},
     "inbounds": [
-      {"tag": "socks", "port": 10801, "protocol": "socks", ...},
-      {"tag": "http",  "port": 11801, "protocol": "http", ...}
+      {"tag": "socks", "port": 10808, "protocol": "socks", ...},
+      {"tag": "http",  "port": 10809, "protocol": "http", ...}
     ],
     "outbounds": [
-      {"tag": "warp-out-1", "protocol": "wireguard", "streamSettings": {"sockopt": {"dialerProxy": "proxy-1"}}, ...},
       {"tag": "proxy-1", "protocol": "vless", ...},
+      {"tag": "warp-out-1", "protocol": "wireguard", "streamSettings": {"sockopt": {"dialerProxy": "proxy-1"}}, ...},
       {"tag": "direct", "protocol": "freedom"},
       {"tag": "block", "protocol": "blackhole"}
     ],
-    "routing": {"domainStrategy": "IPIfNonMatch", "rules": [...]},
+    "routing": {"domainStrategy": "IPIfNonMatch", "rules": [..., {"outboundTag": "warp-out-1", "port": "0-65535"}]},
     "dns": {}
   }
 ]
 ```
 
-Traffic flows through `warp-out-N` by default. WARP connects to its endpoint through `proxy-N` via `dialerProxy`, creating the chain: proxy → WARP → destination. v2rayNG imports each element as a separate profile. MahsaNG supports this format via manual import.
+**Why proxy-N first in outbounds:** v2rayNG detects the proxy type from the first outbound with a known protocol. If wireguard were first, it would show WARP as the profile instead of the actual proxy.
+
+Traffic flow: inbound → routing catch-all rule sends to `warp-out-N` → WARP connects through `proxy-N` via `dialerProxy` → WARP tunnel → destination. v2rayNG imports each element as a separate profile. MahsaNG supports this format via manual import.
 
 ## Pipeline
 

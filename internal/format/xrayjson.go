@@ -13,9 +13,8 @@ import (
 const (
 	warpSecretKey = "KGRrQBayYNRfVU8iecN8VmUF5bgOQ3wmJXOscg53LFM="
 	warpPublicKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
-	warpEndpoint  = "engage.cloudflareclient.com:2408"
+	warpEndpoint  = "162.159.192.1:2408"
 	warpAddress   = "172.16.0.2/32"
-	warpAddress6  = "2606:4700:110:87f3:6e1e:cb18:8fb0:8d33/128"
 )
 
 // FormatXrayJSON produces a JSON array of complete xray-core configs, one per proxy.
@@ -41,7 +40,7 @@ func FormatXrayJSON(entries []rename.RenamedEntry, meta FormatMetadata) []byte {
 			"log":      map[string]any{"loglevel": "warning"},
 			"inbounds":  buildInbounds(i + 1),
 			"outbounds": buildPerProxyOutbounds(ob, i+1),
-			"routing":   buildRoutingRules(),
+			"routing":   buildRoutingRules(i + 1),
 			"dns":      map[string]any{},
 		}
 		configs = append(configs, config)
@@ -51,11 +50,11 @@ func FormatXrayJSON(entries []rename.RenamedEntry, meta FormatMetadata) []byte {
 	return result
 }
 
-// buildInbounds creates socks and http inbounds for a single proxy config.
-// Each proxy gets unique ports so configs can coexist.
+// buildInbounds creates socks and http inbounds with fixed ports.
+// v2rayNG/MahsaNG use fixed ports per profile; unique ports serve no purpose.
 func buildInbounds(index int) []any {
-	socksPort := 10800 + index
-	httpPort := 10800 + 1000 + index
+	socksPort := 10808
+	httpPort := 10809
 	return []any{
 		map[string]any{
 			"tag":      "socks",
@@ -80,13 +79,15 @@ func buildInbounds(index int) []any {
 }
 
 // buildPerProxyOutbounds creates the outbound chain for one proxy:
-// [warp-out-N, proxy-N, direct, block]
-// Traffic default route → warp-out-N. WARP endpoint connects through
-// proxy-N via dialerProxy, forming the chain: proxy → WARP → destination.
+// [proxy-N, warp-out-N, direct, block]
+// v2rayNG's getProxyOutbound() returns the first outbound with a known
+// protocol, so proxy-N must come first for correct detection. Traffic is
+// routed to warp-out-N via catch-all routing rule. WARP connects through
+// proxy-N via dialerProxy → chain: proxy → WARP → destination.
 func buildPerProxyOutbounds(proxyOb map[string]any, index int) []any {
 	return []any{
-		buildWarpOutbound(index),
 		proxyOb,
+		buildWarpOutbound(index),
 		map[string]any{
 			"protocol": "freedom",
 			"tag":      "direct",
@@ -388,7 +389,7 @@ func buildWarpOutbound(index int) map[string]any {
 		"tag":      fmt.Sprintf("warp-out-%d", index),
 		"protocol": "wireguard",
 		"settings": map[string]any{
-			"address": []string{warpAddress, warpAddress6},
+			"address": []string{warpAddress},
 			"mtu":     1280,
 			"peers": []any{map[string]any{
 				"endpoint":     warpEndpoint,
@@ -405,7 +406,8 @@ func buildWarpOutbound(index int) map[string]any {
 	}
 }
 
-func buildRoutingRules() map[string]any {
+func buildRoutingRules(index int) map[string]any {
+	warpTag := fmt.Sprintf("warp-out-%d", index)
 	return map[string]any{
 		"domainStrategy": "IPIfNonMatch",
 		"rules": []any{
@@ -449,6 +451,11 @@ func buildRoutingRules() map[string]any {
 				"domain_suffix": []string{
 					".kg",
 				},
+			},
+			map[string]any{
+				"type":        "field",
+				"outboundTag": warpTag,
+				"port":        "0-65535",
 			},
 		},
 	}
