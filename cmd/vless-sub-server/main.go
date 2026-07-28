@@ -167,17 +167,12 @@ func refreshSubscriptions() {
 			resolved = append(resolved, r)
 		}
 	}
-	// Filter out XHTTP transport — xray-core panic on nil Config (upstream #5997)
-	var probed []parse.ProxyRecord
-	for _, r := range resolved {
-		if r.QueryParams["type"] != "xhttp" {
-			probed = append(probed, r)
-		}
-	}
-	xhttpSkipped := len(resolved) - len(probed)
-	if xhttpSkipped > 0 {
-		log.Printf("[refresh] skipped %d xhttp proxies (xray-core #5997)", xhttpSkipped)
-	}
+	// XHTTP transport is supported via xhttpSettings handler (exitprobe.go).
+	// The former filter that dropped xhttp proxies (xray-core nil Config panic,
+	// upstream #5997) is no longer needed — xray-core v1.260327.0 probes
+	// xhttp+reality outbounds without panicking (verified with realityvpn.online
+	// xhttp proxies: 23/23 alive, 0 panics).
+	probed := resolved
 
 	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d probed=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(probed), len(dnsMap))
 
