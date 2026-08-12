@@ -26,7 +26,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const geoAPIURL = "https://ipwho.is/"
+const (
+	geoAPIURL    = "https://ipwho.is/"
+	healthAPIURL = "https://speed.cloudflare.com/__down?bytes=0"
+)
 
 type ExitProbeResult struct {
 	ExitIP  string
@@ -147,47 +150,36 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 
 	outboundTag := ep.proxyTags[idx]
 
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			ctx = session.SetForcedOutboundTagToContext(ctx, outboundTag)
-			host, portStr, _ := net.SplitHostPort(addr)
-			port, _ := strconv.Atoi(portStr)
-			dest := xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(port))
-			return core.Dial(ctx, ep.instance, dest)
-		},
-		TLSHandshakeTimeout:   ep.cfg.ExitProbeTimeout,
-		ResponseHeaderTimeout: ep.cfg.ExitProbeTimeout,
-		IdleConnTimeout:       90 * time.Second,
-	}
-	client := &http.Client{Transport: transport}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", geoAPIURL, nil)
-	if err != nil {
-		return &ExitProbeResult{XrayOK: false}
-	}
-	req.Header.Set("User-Agent", "vless-sub-server/1.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return &ExitProbeResult{XrayOK: false}
-	}
-	defer func() {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}()
-
-	if resp.StatusCode != 200 {
-		return &ExitProbeResult{XrayOK: false}
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return &ExitProbeResult{XrayOK: false}
-	}
-
+	body, geoOK := ep.request(ctx, outboundTag, geoAPIURL, ep.cfg.ExitProbeTimeout)
 	var ipResp geo.IPWhoisResponse
-	if err := json.Unmarshal(body, &ipResp); err != nil || !ipResp.Success || ipResp.IP == "" {
-		return &ExitProbeResult{XrayOK: false}
+	geoOK = geoOK && json.Unmarshal(body, &ipResp) == nil && ipResp.Success && ipResp.IP != ""
+
+	sampleCount := ep.cfg.ProbeSampleCount
+	if sampleCount == 0 {
+		sampleCount = 5
+	}
+	sampleTimeout := ep.cfg.ProbeSampleTimeout
+	if sampleTimeout == 0 {
+		sampleTimeout = 5 * time.Second
+	}
+	var samples []time.Duration
+	for i := 0; i < sampleCount; i++ {
+		start := time.Now()
+		_, ok := ep.request(ctx, outboundTag, healthAPIURL, sampleTimeout)
+		if ok {
+			samples = append(samples, time.Since(start))
+		}
+		if i+1 < sampleCount && ep.cfg.ProbeSampleGap > 0 {
+			select {
+			case <-ctx.Done():
+				return &ExitProbeResult{Metrics: aggregateHealthSamples(samples, sampleCount, geoOK)}
+			case <-time.After(ep.cfg.ProbeSampleGap):
+			}
+		}
+	}
+	metrics := aggregateHealthSamples(samples, sampleCount, geoOK)
+	if !metrics.InternetReachable {
+		return &ExitProbeResult{Metrics: metrics}
 	}
 
 	city := ipResp.City
@@ -203,6 +195,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		ExitIP:  ipResp.IP,
 		ExitLoc: ipResp.CountryCode,
 		XrayOK:  true,
+		Metrics: metrics,
 		GeoInfo: &geo.GeoInfo{
 			CountryCode: ipResp.CountryCode,
 			City:        city,
@@ -210,6 +203,31 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 			IP:          ipResp.IP,
 		},
 	}
+}
+
+func (ep *ExitProber) request(ctx context.Context, outboundTag, target string, timeout time.Duration) ([]byte, bool) {
+	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ctx = session.SetForcedOutboundTagToContext(ctx, outboundTag)
+		host, portStr, _ := net.SplitHostPort(addr)
+		port, _ := strconv.Atoi(portStr)
+		return core.Dial(ctx, ep.instance, xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(port)))
+	}, TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout}
+	client := &http.Client{Transport: transport, Timeout: timeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("User-Agent", "vless-sub-server/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return body, err == nil
 }
 
 type xrayOutbound struct {

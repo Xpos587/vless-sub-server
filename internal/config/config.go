@@ -3,17 +3,20 @@ package config
 import "time"
 
 type Config struct {
-	Port             int           `env:"PORT" envDefault:"8080"`
-	RefreshInterval  time.Duration `env:"REFRESH_INTERVAL" envDefault:"30m"`
-	SubscriptionURLs []string      `env:"SUBSCRIPTION_URLS,required" envSeparator:","`
-	NameInclude      string        `env:"NAME_INCLUDE"`
-	NameExclude      string        `env:"NAME_EXCLUDE"`
-	DNSTimeout       time.Duration `env:"DNS_TIMEOUT" envDefault:"2s"`
-	DNSCacheTTL      time.Duration `env:"DNS_CACHE_TTL" envDefault:"10m"`
-	ExitProbeTimeout time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
-	MaxConcurrent    int           `env:"MAX_CONCURRENT" envDefault:"50"`
-	GeoDatDir        string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
-	Hwid             string        `env:"HWID,required"`
+	Port               int           `env:"PORT" envDefault:"8080"`
+	RefreshInterval    time.Duration `env:"REFRESH_INTERVAL" envDefault:"30m"`
+	SubscriptionURLs   []string      `env:"SUBSCRIPTION_URLS,required" envSeparator:","`
+	NameInclude        string        `env:"NAME_INCLUDE"`
+	NameExclude        string        `env:"NAME_EXCLUDE"`
+	DNSTimeout         time.Duration `env:"DNS_TIMEOUT" envDefault:"2s"`
+	DNSCacheTTL        time.Duration `env:"DNS_CACHE_TTL" envDefault:"10m"`
+	ExitProbeTimeout   time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
+	ProbeSampleCount   int           `env:"PROBE_SAMPLE_COUNT" envDefault:"5"`
+	ProbeSampleGap     time.Duration `env:"PROBE_SAMPLE_GAP" envDefault:"100ms"`
+	ProbeSampleTimeout time.Duration `env:"PROBE_SAMPLE_TIMEOUT" envDefault:"5s"`
+	MaxConcurrent      int           `env:"MAX_CONCURRENT" envDefault:"50"`
+	GeoDatDir          string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
+	Hwid               string        `env:"HWID,required"`
 }
 
 var CustomHeaders = map[string]string{
@@ -24,7 +27,7 @@ var CustomHeaders = map[string]string{
 	"X-Device-Model":  "m7600qe_x86_64",
 	"X-Hwid":          "", // populated at runtime from Config.Hwid
 	"X-Ver-Os":        "artix_unknown",
-	"Accept-Language":  "en,*",
+	"Accept-Language": "en,*",
 }
 
 var PlaceholderHosts = map[string]bool{
