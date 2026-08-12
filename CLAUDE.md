@@ -23,16 +23,19 @@ podman run -e PORT=8080 -p 8080:8080 vless-sub-server
 ## Pipeline
 
 ```
-fetch → parse → DNS → TCP probe → exit-IP probe (xray) → rename → format
+fetch → stale-source merge → parse → DNS → xray geo + health samples
+  → quality state + EWMA → bounded bandwidth stage → rename → format → atomic cache swap
 ```
 
 1. **fetch** — concurrent HTTP GET on subscription URLs, base64/sing-box JSON decode
 2. **parse** — VLESS/VMess/Trojan/SS URL → `ProxyRecord`
 3. **DNS** — miekg/dns A-record resolve, retry once, detect private IPs
-4. **TCP probe** — dial test, collect latency
-5. **exit-IP probe** — xray-core in-process: SOCKS5 inbound per proxy → HTTP GET ipwho.is → fallback CF trace + ip-api.com batch
-6. **rename** — `🇩🇪 Frankfurt (ISP)` format, deduplicate names
-7. **format** — header with stats + base subscription output; `?format=json` → per-proxy xray-core config array
+4. **exit-IP + health probe** — xray-core in-process: `ipwho.is` plus five
+   sequential Cloudflare health samples per proxy
+5. **quality** — median latency, loss, jitter, EWMA score, and recovery state
+6. **bandwidth** — rotating, preselected routes only; bounded by a global byte budget
+7. **format + publish** — URL and JSON share one ordered snapshot; empty or
+   systemic-failure refreshes never replace a populated cache
 
 ## Critical Constraints
 
@@ -51,14 +54,15 @@ xray-core is imported as a Go library, not a subprocess. The `core.Instance` is 
 ## Architecture
 
 ```
-cmd/vless-sub-server/main.go   — HTTP server, pipeline orchestration, caching
+cmd/vless-sub-server/main.go   — HTTP server and composition root
 internal/
   config/config.go             — env-var config, custom headers, placeholder hosts
   fetch/fetch.go               — subscription fetch + sing-box JSON → URL conversion
   parse/parse.go + types.go   — URL parsing (VLESS/VMess/Trojan/SS), name filter
   dns/dns.go                  — DNS resolution (miekg/dns), private IP detection
-  probe/probe.go               — TCP connectivity probe
   exitprobe/exitprobe.go       — xray-core integration, exit-IP detection, geo lookup
+  pipeline/pipeline.go         — refresh orchestration and publication policy
+  quality/                     — metrics, scoring, state machine, runtime history
   geo/geo.go                   — GeoInfo/IPWhoisResponse types
   rename/rename.go             — rename with flag+city+ISP, dedup
   format/format.go             — output formatting with header + URL reconstruction
@@ -73,10 +77,19 @@ internal/
 | `REFRESH_INTERVAL` | `30m` | Auto-refresh period |
 | `SUBSCRIPTION_URLS` | (comma-separated) | Subscription endpoints |
 | `NAME_INCLUDE` / `NAME_EXCLUDE` | `""` | Filter proxies by fragment |
-| `TCP_TIMEOUT` | `3s` | TCP probe timeout |
 | `DNS_TIMEOUT` | `2s` | DNS resolve timeout |
 | `EXIT_PROBE_TIMEOUT` | `12s` | Exit-IP probe timeout |
-| `MAX_CONCURRENT` | `10` | Concurrency limit for probes |
+| `PROBE_SAMPLE_COUNT` | `5` | Sequential health samples per proxy (1-10) |
+| `PROBE_SAMPLE_GAP` | `100ms` | Delay between health samples |
+| `PROBE_SAMPLE_TIMEOUT` | `5s` | Timeout per health sample |
+| `BANDWIDTH_ENABLED` | `true` | Enable bounded rotating bandwidth probes |
+| `BANDWIDTH_BYTES` | `1048576` | Bytes per bandwidth download |
+| `BANDWIDTH_BUDGET_BYTES` | `33554432` | Hard scheduled download budget per refresh |
+| `BANDWIDTH_TIMEOUT` | `8s` | Timeout per bandwidth probe |
+| `BANDWIDTH_REFRESH_AFTER` | `2h` | Re-sample interval after bandwidth success |
+| `BANDWIDTH_RETRY_AFTER` | `30m` | Retry interval after bandwidth failure |
+| `SOURCE_STALE_MAX_AGE` | `6h` | Per-source timeout/429/5xx fallback age |
+| `MAX_CONCURRENT` | `50` | Concurrency limit for probes |
 | `GEO_DAT_DIR` | `/usr/local/share/xray` | Xray geo dat files |
 
 ## Endpoints

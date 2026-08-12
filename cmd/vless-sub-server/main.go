@@ -15,32 +15,20 @@ import (
 
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/dns"
-	"github.com/michael/vless-sub-server/internal/exitprobe"
-	"github.com/michael/vless-sub-server/internal/fetch"
-	"github.com/michael/vless-sub-server/internal/format"
-	"github.com/michael/vless-sub-server/internal/geo"
-	"github.com/michael/vless-sub-server/internal/parse"
-	"github.com/michael/vless-sub-server/internal/rename"
+	"github.com/michael/vless-sub-server/internal/pipeline"
 )
 
 const initWaitTimeout = 5 * time.Second
 
-type cachedData struct {
-	output      string
-	jsonOutput  []byte
-	lastRefresh time.Time
-}
-
 var (
-	cache      atomic.Value // stores *cachedData
 	refreshing atomic.Int32 // 0=idle, 1=refreshing
 	cfg        *config.Config
-	dnsCache   *dns.DNSCache
+	service    *pipeline.Pipeline
 )
 
 func main() {
 	cfg = loadConfig()
-	dnsCache = dns.NewDNSCache(cfg.DNSCacheTTL)
+	service = pipeline.New(cfg, dns.NewDNSCache(cfg.DNSCacheTTL))
 
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
@@ -102,108 +90,11 @@ func refreshSubscriptions() {
 	start := time.Now()
 	log.Printf("[refresh] starting...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
-	// Phase 1: Fetch subscriptions
-	fetchResults := fetch.FetchSubscriptions(ctx, cfg.SubscriptionURLs, 15*time.Second)
-	sourcesOK := 0
-	sourcesFailed := 0
-	for _, r := range fetchResults {
-		if r.Status == "ok" {
-			sourcesOK++
-		} else {
-			sourcesFailed++
-		}
-	}
-
-	// Phase 2: Parse
-	var allLines []string
-	for _, r := range fetchResults {
-		allLines = append(allLines, r.Lines...)
-	}
-	parseResult := parse.ParseAllLines(allLines)
-	filtered := parse.ApplyNameFilter(parseResult.Records, cfg.NameInclude, cfg.NameExclude)
-
-	// Phase 3: DNS resolve
-	dnsMap := dns.ResolveHosts(ctx, dedupHosts(filtered), 20, cfg.DNSTimeout, dnsCache)
-
-	var resolved []parse.ProxyRecord
-	for _, r := range filtered {
-		if d, ok := dnsMap[r.Host]; ok && d.IP != "" {
-			resolved = append(resolved, r)
-		}
-	}
-	// XHTTP transport is supported via xhttpSettings handler (exitprobe.go).
-	// The former filter that dropped xhttp proxies (xray-core nil Config panic,
-	// upstream #5997) is no longer needed — xray-core v1.260327.0 probes
-	// xhttp+reality outbounds without panicking (verified with realityvpn.online
-	// xhttp proxies: 23/23 alive, 0 panics).
-	probed := resolved
-
-	log.Printf("[refresh] parsed=%d filtered=%d dns-resolved=%d probed=%d (unique-hosts=%d)", len(parseResult.Records), len(filtered), len(resolved), len(probed), len(dnsMap))
-
-	// Phase 4: Exit-IP probe via Xray
-	var geoRecords []struct {
-		Record parse.ProxyRecord
-		Geo    *geo.GeoInfo
-		IsLAN  bool
-	}
-	geoAvailable := 0
-
-	if len(probed) > 0 {
-		ep := exitprobe.NewExitProber(cfg)
-		if err := ep.StartWithProxies(probed); err != nil {
-			log.Printf("[refresh] xray start failed: %v, skipping probe", err)
-		} else {
-			exitResults := ep.ProbeAll(ctx, probed)
-			ep.Stop()
-
-			for i, r := range probed {
-				er, probeOK := exitResults[i]
-				if !probeOK || !er.XrayOK {
-					continue
-				}
-				isLAN := dnsMap[r.Host] != nil && dnsMap[r.Host].IsPrivate
-				geoInfo := er.GeoInfo
-				if geoInfo != nil {
-					geoAvailable++
-				}
-				geoRecords = append(geoRecords, struct {
-					Record parse.ProxyRecord
-					Geo    *geo.GeoInfo
-					IsLAN  bool
-				}{r, geoInfo, isLAN})
-			}
-			log.Printf("[refresh] xray-verified=%d", len(geoRecords))
-		}
-	}
-
-	// Phase 5: Rename
-	renamed := rename.RenameAll(geoRecords)
-
-	totalAlive := len(renamed)
-	totalDead := len(resolved) - totalAlive
-
-	fmeta := format.FormatMetadata{
-		TotalFetched:    len(allLines),
-		TotalParsed:     len(filtered),
-		TotalSkipped:    parseResult.Skipped,
-		TotalDuplicates: parseResult.Duplicates,
-		TotalAlive:      totalAlive,
-		TotalDead:       totalDead,
-		SourcesOK:       sourcesOK,
-		SourcesFailed:   sourcesFailed,
-		GeoAvailable:    geoAvailable,
-		GeoTotal:        len(probed),
-	}
-
-	output := format.FormatOutput(renamed, fmeta)
-	jsonOutput := format.FormatXrayJSON(renamed, fmeta)
-
-	cache.Store(&cachedData{output: output, jsonOutput: jsonOutput, lastRefresh: time.Now()})
-	dnsCache.Purge()
-	log.Printf("[refresh] done in %s: %d alive, %d with geo", time.Since(start), totalAlive, geoAvailable)
+	result := service.Refresh(ctx)
+	log.Printf("[refresh] done in %s: parsed=%d resolved=%d good=%d partial=%d dead=%d bandwidth=%d/%d published=%t", time.Since(start), result.Parsed, result.Resolved, result.Good, result.Partial, result.Dead, result.BandwidthSuccesses, result.BandwidthCandidates, result.Published)
 }
 
 func triggerRefresh() {
@@ -221,27 +112,15 @@ func triggerRefresh() {
 	}()
 }
 
-func dedupHosts(records []parse.ProxyRecord) []string {
-	seen := make(map[string]bool, len(records))
-	var hosts []string
-	for _, r := range records {
-		if !seen[r.Host] {
-			seen[r.Host] = true
-			hosts = append(hosts, r.Host)
-		}
-	}
-	return hosts
-}
-
 func handleSub(w http.ResponseWriter, r *http.Request) {
-	v := cache.Load()
-	if v == nil {
+	data, ok := service.Cached()
+	if !ok {
 		triggerRefresh()
 		select {
 		case <-time.After(initWaitTimeout):
-			v = cache.Load()
+			data, ok = service.Cached()
 		}
-		if v == nil {
+		if !ok {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -249,28 +128,26 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	data := v.(*cachedData)
-	if time.Since(data.lastRefresh) > cfg.RefreshInterval {
+	if time.Since(data.LastRefresh) > cfg.RefreshInterval {
 		triggerRefresh()
 	}
 
 	formatParam := r.URL.Query().Get("format")
 	switch formatParam {
 	case "", "url":
-		body := []byte(data.output)
+		body := []byte(data.Output)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		w.Header().Set("X-Last-Refresh", data.lastRefresh.Format(time.RFC3339))
+		w.Header().Set("X-Last-Refresh", data.LastRefresh.Format(time.RFC3339))
 		w.Write(body)
 
 	case "json":
-		body := data.jsonOutput
+		body := data.JSONOutput
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		w.Header().Set("X-Last-Refresh", data.lastRefresh.Format(time.RFC3339))
+		w.Header().Set("X-Last-Refresh", data.LastRefresh.Format(time.RFC3339))
 		w.Write(body)
 
 	default:

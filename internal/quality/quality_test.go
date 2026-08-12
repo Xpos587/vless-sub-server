@@ -6,6 +6,17 @@ import (
 	"time"
 )
 
+func TestIdentityIgnoresFragmentAndNormalizesQueryOrder(t *testing.T) {
+	a := Identity("vless", "EXAMPLE.com", 443, "secret", map[string]string{"sni": "a", "type": "ws"})
+	b := Identity("vless", "example.com", 443, "secret", map[string]string{"type": "ws", "sni": "a"})
+	if a != b {
+		t.Fatalf("identity mismatch: %s != %s", a, b)
+	}
+	if a == Identity("vless", "example.com", 443, "other", map[string]string{"sni": "a", "type": "ws"}) {
+		t.Fatal("credentials must affect identity")
+	}
+}
+
 func TestAggregateUsesMedianAndConsecutiveJitter(t *testing.T) {
 	metrics := Aggregate(
 		[]time.Duration{100 * time.Millisecond, 130 * time.Millisecond, 110 * time.Millisecond},
@@ -51,6 +62,16 @@ func TestScoreBoundsBandwidthInfluenceAndColdStart(t *testing.T) {
 	}
 }
 
+func TestScoreUsesRetainedBandwidthOnlyWhileFresh(t *testing.T) {
+	metrics := Metrics{InternetReachable: true, SuccessCount: 5, RequestLatencyMS: 200, DownloadMbps: 100}
+	stale, _ := Score(metrics, 0, false, time.Now(), DefaultScoringConfig())
+	metrics.BandwidthFresh = true
+	fresh, _ := Score(metrics, 0, false, time.Now(), DefaultScoringConfig())
+	if fresh >= stale {
+		t.Fatalf("fresh bandwidth must improve score: stale=%v fresh=%v", stale, fresh)
+	}
+}
+
 func TestTransitionRecoversAfterCooldownAndTwoGoodObservations(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	cfg := DefaultStateConfig()
@@ -83,6 +104,19 @@ func TestSelectBandwidthCandidatesHonorsBudgetAndOldestFirst(t *testing.T) {
 	}
 	got := SelectBandwidthCandidates(runtimes, now, cfg)
 	if len(got) != 2 || got[0].Key != "never" || got[1].Key != "old" {
+		t.Fatalf("candidates = %#v", got)
+	}
+}
+
+func TestSelectBandwidthCandidatesSkipsFreshAttempts(t *testing.T) {
+	now := time.Now()
+	cfg := DefaultBandwidthConfig()
+	cfg.BytesPerProbe, cfg.BudgetBytes = 10, 10
+	got := SelectBandwidthCandidates([]Runtime{
+		{Key: "retry-later", Reachable: true, LastBandwidthAttemptAt: now.Add(-time.Minute)},
+		{Key: "due", Reachable: true, LastBandwidthAttemptAt: now.Add(-cfg.RetryAfter)},
+	}, now, cfg)
+	if len(got) != 1 || got[0].Key != "due" {
 		t.Fatalf("candidates = %#v", got)
 	}
 }

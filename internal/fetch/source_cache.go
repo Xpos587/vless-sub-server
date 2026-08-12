@@ -25,7 +25,11 @@ func (c *SourceCache) Merge(now time.Time, results []FetchResult, maxAge time.Du
 	defer c.mu.Unlock()
 	var lines []string
 	for _, result := range results {
-		if result.Status == "ok" && len(result.Lines) > 0 {
+		if result.Status == "ok" {
+			if len(result.Lines) == 0 {
+				delete(c.snapshots, result.URL)
+				continue
+			}
 			copyLines := append([]string(nil), result.Lines...)
 			c.snapshots[result.URL] = sourceSnapshot{lines: copyLines, lastSuccess: now}
 			lines = append(lines, copyLines...)

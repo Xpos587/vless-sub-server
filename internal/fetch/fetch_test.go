@@ -1,9 +1,22 @@
 package fetch
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestFetchSingleClassifiesEmptySuccessfulResponseAsOK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+	result := fetchSingle(context.Background(), server.URL, time.Second)
+	if result.Status != "ok" || len(result.Lines) != 0 {
+		t.Fatalf("result = %#v, want successful empty result", result)
+	}
+}
 
 func TestExtractSingboxURLsTransportKey(t *testing.T) {
 	// sing-box uses "transport" instead of "streamSettings"

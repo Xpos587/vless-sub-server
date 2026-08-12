@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,8 +28,9 @@ import (
 )
 
 const (
-	geoAPIURL    = "https://ipwho.is/"
-	healthAPIURL = "https://speed.cloudflare.com/__down?bytes=0"
+	geoAPIURL       = "https://ipwho.is/"
+	healthAPIURL    = "https://speed.cloudflare.com/__down?bytes=0"
+	bandwidthAPIURL = "https://speed.cloudflare.com/__down?bytes="
 )
 
 type ExitProbeResult struct {
@@ -165,8 +167,8 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	var samples []time.Duration
 	for i := 0; i < sampleCount; i++ {
 		start := time.Now()
-		_, ok := ep.request(ctx, outboundTag, healthAPIURL, sampleTimeout)
-		if ok {
+		body, ok := ep.request(ctx, outboundTag, healthAPIURL, sampleTimeout)
+		if ok && len(body) == 0 {
 			samples = append(samples, time.Since(start))
 		}
 		if i+1 < sampleCount && ep.cfg.ProbeSampleGap > 0 {
@@ -228,6 +230,78 @@ func (ep *ExitProber) request(ctx context.Context, outboundTag, target string, t
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return body, err == nil
+}
+
+// ProbeBandwidth measures selected records only; callers schedule them before any bytes are downloaded.
+func (ep *ExitProber) ProbeBandwidth(ctx context.Context, indices []int) map[int]float64 {
+	results := make(map[int]float64, len(indices))
+	if !ep.cfg.BandwidthEnabled {
+		return results
+	}
+	limit := make(chan struct{}, 2)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, index := range indices {
+		if index < 0 || index >= len(ep.proxyTags) {
+			continue
+		}
+		index := index
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case limit <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-limit }()
+			mbps := ep.bandwidth(ctx, ep.proxyTags[index])
+			if mbps > 0 {
+				mu.Lock()
+				results[index] = mbps
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+func (ep *ExitProber) bandwidth(ctx context.Context, outboundTag string) float64 {
+	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ctx = session.SetForcedOutboundTagToContext(ctx, outboundTag)
+		host, portStr, _ := net.SplitHostPort(addr)
+		port, _ := strconv.Atoi(portStr)
+		return core.Dial(ctx, ep.instance, xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(port)))
+	}, ResponseHeaderTimeout: ep.cfg.BandwidthTimeout}
+	client := &http.Client{Transport: transport, Timeout: ep.cfg.BandwidthTimeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, bandwidthAPIURL+strconv.FormatInt(ep.cfg.BandwidthBytes, 10), nil)
+	if err != nil {
+		return 0
+	}
+	var firstByte time.Time
+	trace := &httptrace.ClientTrace{GotFirstResponseByte: func() { firstByte = time.Now() }}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.ContentLength != ep.cfg.BandwidthBytes {
+		return 0
+	}
+	n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, ep.cfg.BandwidthBytes+1))
+	if err != nil || n != ep.cfg.BandwidthBytes {
+		return 0
+	}
+	if firstByte.IsZero() {
+		return 0
+	}
+	seconds := time.Since(firstByte).Seconds()
+	if seconds <= 0 {
+		return 0
+	}
+	return float64(n*8) / seconds / 1e6
 }
 
 type xrayOutbound struct {

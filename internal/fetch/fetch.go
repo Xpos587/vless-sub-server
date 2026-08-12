@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func fetchSingle(ctx context.Context, url string, timeout time.Duration) FetchRe
 	client := &http.Client{Timeout: timeout, Transport: fetchTransport}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return FetchResult{URL: url, Status: "error", Error: err.Error()}
+		return FetchResult{URL: url, Status: "error", Error: "request setup"}
 	}
 	for k, v := range config.CustomHeaders {
 		req.Header.Set(k, v)
@@ -57,28 +58,28 @@ func fetchSingle(ctx context.Context, url string, timeout time.Duration) FetchRe
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[fetch] %s: %v", url, err)
-		return FetchResult{URL: url, Status: "error", Error: err.Error()}
+		log.Printf("[fetch] request failed")
+		return FetchResult{URL: url, Status: "error", Error: "transport"}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("[fetch] %s: HTTP %d", url, resp.StatusCode)
-		return FetchResult{URL: url, Status: "error", Error: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		log.Printf("[fetch] HTTP %d", resp.StatusCode)
+		return FetchResult{URL: url, Status: "error", Error: "HTTP " + strconv.Itoa(resp.StatusCode)}
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[fetch] %s: read body: %v", url, err)
-		return FetchResult{URL: url, Status: "error", Error: err.Error()}
+		log.Printf("[fetch] read body failed")
+		return FetchResult{URL: url, Status: "error", Error: "read body"}
 	}
 
 	lines := decodeSubscription(string(body))
 	if len(lines) == 0 {
-		log.Printf("[fetch] %s: empty response (body=%d bytes)", url, len(body))
-		return FetchResult{URL: url, Status: "error", Error: "empty response"}
+		log.Printf("[fetch] successful empty response")
+		return FetchResult{URL: url, Status: "ok"}
 	}
-	log.Printf("[fetch] %s: ok, %d lines", url, len(lines))
+	log.Printf("[fetch] ok, %d lines", len(lines))
 	return FetchResult{URL: url, Status: "ok", Lines: lines}
 }
 

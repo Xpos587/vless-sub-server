@@ -25,3 +25,12 @@ func TestLoadReadsProbeSamplingValues(t *testing.T) {
 		t.Fatalf("cfg = %#v", cfg)
 	}
 }
+
+func TestLoadRejectsBandwidthBudgetAboveHardLimit(t *testing.T) {
+	t.Setenv("SUBSCRIPTION_URLS", "https://example.test/sub")
+	t.Setenv("HWID", "test")
+	t.Setenv("BANDWIDTH_BUDGET_BYTES", "33554433")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want hard bandwidth budget rejection")
+	}
+}

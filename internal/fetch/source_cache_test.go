@@ -25,6 +25,16 @@ func TestSourceCacheClearsAuthoritativeEmptyResponse(t *testing.T) {
 	}
 }
 
+func TestSourceCacheClearsSuccessfulEmptyResponse(t *testing.T) {
+	now := time.Now()
+	cache := NewSourceCache()
+	cache.Merge(now, []FetchResult{{URL: "one", Status: "ok", Lines: []string{"vless://old"}}}, time.Hour)
+	lines := cache.Merge(now.Add(time.Minute), []FetchResult{{URL: "one", Status: "ok"}}, time.Hour)
+	if len(lines) != 0 {
+		t.Fatalf("lines = %#v, want empty", lines)
+	}
+}
+
 func TestSourceCacheExpiresStaleResult(t *testing.T) {
 	now := time.Now()
 	cache := NewSourceCache()
