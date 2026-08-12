@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -33,8 +32,8 @@ type cachedData struct {
 }
 
 var (
-	cache      atomic.Value   // stores *cachedData
-	refreshing atomic.Int32   // 0=idle, 1=refreshing
+	cache      atomic.Value // stores *cachedData
+	refreshing atomic.Int32 // 0=idle, 1=refreshing
 	cfg        *config.Config
 	dnsCache   *dns.DNSCache
 )
@@ -92,43 +91,11 @@ func main() {
 }
 
 func loadConfig() *config.Config {
-	c := &config.Config{}
-	c.Port, _ = strconv.Atoi(envOr("PORT", "8080"))
-	if d, err := time.ParseDuration(envOr("REFRESH_INTERVAL", "30m")); err == nil {
-		c.RefreshInterval = d
-	} else {
-		c.RefreshInterval = 30 * time.Minute
-	}
-	if v := os.Getenv("SUBSCRIPTION_URLS"); v != "" {
-		c.SubscriptionURLs = strings.Split(v, ",")
-	} else {
-		log.Fatal("[config] SUBSCRIPTION_URLS is required")
-	}
-	c.NameInclude = envOr("NAME_INCLUDE", "")
-	c.NameExclude = envOr("NAME_EXCLUDE", "")
-	if d, err := time.ParseDuration(envOr("DNS_TIMEOUT", "2s")); err == nil {
-		c.DNSTimeout = d
-	}
-	if d, err := time.ParseDuration(envOr("DNS_CACHE_TTL", "10m")); err == nil {
-		c.DNSCacheTTL = d
-	}
-	if d, err := time.ParseDuration(envOr("EXIT_PROBE_TIMEOUT", "12s")); err == nil {
-		c.ExitProbeTimeout = d
-	}
-	c.MaxConcurrent, _ = strconv.Atoi(envOr("MAX_CONCURRENT", "50"))
-	c.GeoDatDir = envOr("GEO_DAT_DIR", "/usr/local/share/xray")
-	c.Hwid = os.Getenv("HWID")
-	if c.Hwid == "" {
-		log.Fatal("[config] HWID is required")
+	c, err := config.Load()
+	if err != nil {
+		log.Fatalf("[config] %v", err)
 	}
 	return c
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 func refreshSubscriptions() {

@@ -1,6 +1,12 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
 
 type Config struct {
 	Port               int           `env:"PORT" envDefault:"8080"`
@@ -17,6 +23,86 @@ type Config struct {
 	MaxConcurrent      int           `env:"MAX_CONCURRENT" envDefault:"50"`
 	GeoDatDir          string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
 	Hwid               string        `env:"HWID,required"`
+}
+
+func Load() (*Config, error) {
+	c := &Config{
+		Port:               8080,
+		RefreshInterval:    30 * time.Minute,
+		DNSTimeout:         2 * time.Second,
+		DNSCacheTTL:        10 * time.Minute,
+		ExitProbeTimeout:   12 * time.Second,
+		ProbeSampleCount:   5,
+		ProbeSampleGap:     100 * time.Millisecond,
+		ProbeSampleTimeout: 5 * time.Second,
+		MaxConcurrent:      50,
+		GeoDatDir:          "/usr/local/share/xray",
+	}
+	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
+		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
+	} else {
+		c.SubscriptionURLs = strings.Split(raw, ",")
+	}
+	if c.Hwid = os.Getenv("HWID"); c.Hwid == "" {
+		return nil, fmt.Errorf("HWID is required")
+	}
+	c.NameInclude, c.NameExclude = os.Getenv("NAME_INCLUDE"), os.Getenv("NAME_EXCLUDE")
+	var err error
+	if c.Port, err = intEnv("PORT", c.Port); err != nil {
+		return nil, err
+	}
+	if c.MaxConcurrent, err = intEnv("MAX_CONCURRENT", c.MaxConcurrent); err != nil || c.MaxConcurrent < 1 {
+		return nil, fmt.Errorf("MAX_CONCURRENT must be positive")
+	}
+	if c.ProbeSampleCount, err = intEnv("PROBE_SAMPLE_COUNT", c.ProbeSampleCount); err != nil || c.ProbeSampleCount < 1 || c.ProbeSampleCount > 10 {
+		return nil, fmt.Errorf("PROBE_SAMPLE_COUNT must be between 1 and 10")
+	}
+	if c.RefreshInterval, err = durationEnv("REFRESH_INTERVAL", c.RefreshInterval); err != nil {
+		return nil, err
+	}
+	if c.DNSTimeout, err = durationEnv("DNS_TIMEOUT", c.DNSTimeout); err != nil {
+		return nil, err
+	}
+	if c.DNSCacheTTL, err = durationEnv("DNS_CACHE_TTL", c.DNSCacheTTL); err != nil {
+		return nil, err
+	}
+	if c.ExitProbeTimeout, err = durationEnv("EXIT_PROBE_TIMEOUT", c.ExitProbeTimeout); err != nil || c.ExitProbeTimeout <= 0 {
+		return nil, fmt.Errorf("EXIT_PROBE_TIMEOUT must be positive")
+	}
+	if c.ProbeSampleGap, err = durationEnv("PROBE_SAMPLE_GAP", c.ProbeSampleGap); err != nil || c.ProbeSampleGap < 0 || c.ProbeSampleGap > 2*time.Second {
+		return nil, fmt.Errorf("PROBE_SAMPLE_GAP must be between 0 and 2s")
+	}
+	if c.ProbeSampleTimeout, err = durationEnv("PROBE_SAMPLE_TIMEOUT", c.ProbeSampleTimeout); err != nil || c.ProbeSampleTimeout <= 0 {
+		return nil, fmt.Errorf("PROBE_SAMPLE_TIMEOUT must be positive")
+	}
+	if value := os.Getenv("GEO_DAT_DIR"); value != "" {
+		c.GeoDatDir = value
+	}
+	return c, nil
+}
+
+func intEnv(name string, fallback int) (int, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	return parsed, nil
+}
+
+func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	return parsed, nil
 }
 
 var CustomHeaders = map[string]string{
