@@ -9,13 +9,14 @@ import (
 	"strings"
 
 	"github.com/michael/vless-sub-server/internal/config"
+	"github.com/michael/vless-sub-server/internal/xhttp"
 )
 
 var proxySchemes = []string{"vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://"}
 
 type ParseResult struct {
-	Records   []ProxyRecord
-	Skipped   int
+	Records    []ProxyRecord
+	Skipped    int
 	Duplicates int
 }
 
@@ -67,12 +68,11 @@ func ParseAllLines(lines []string) ParseResult {
 			continue
 		}
 
-		transport := record.QueryParams["type"]
-		if transport == "" {
-			transport = "tcp"
+		query := url.Values{}
+		for name, value := range record.QueryParams {
+			query.Set(name, value)
 		}
-		sni := record.QueryParams["sni"]
-		key := record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol) + ":" + record.UUIDOrPassword + ":" + transport + ":" + sni
+		key := record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol) + ":" + record.UUIDOrPassword + ":" + query.Encode()
 		if seen[key] {
 			duplicates++
 			continue
@@ -128,6 +128,9 @@ func parseVless(line string) *ProxyRecord {
 		}
 	}
 	normalizeInsecure(params)
+	if !normalizeXHTTP(params) {
+		return nil
+	}
 
 	return &ProxyRecord{
 		Protocol:       VLESS,
@@ -153,25 +156,27 @@ func parseVMess(line string) *ProxyRecord {
 	}
 
 	var cfg struct {
-		V             string `json:"v"`
-		Host          string `json:"add"`
-		Port          any    `json:"port"`
-		ID            string `json:"id"`
-		PS            string `json:"ps"`
-		Net           string `json:"net"`
-		Type          string `json:"type"`
-		TLS           string `json:"tls"`
-		SNI           string `json:"sni"`
-		Path          string `json:"path"`
-		Host2         string `json:"host"`
-		Flow          string `json:"flow"`
-		Scy           string `json:"scy"`
-		Alpn          string `json:"alpn"`
-		FP            string `json:"fp"`
-		PBK           string `json:"pbk"`
-		SID           string `json:"sid"`
-		SPX           string `json:"spx"`
-		AllowInsecure bool   `json:"allowInsecure"`
+		V             string          `json:"v"`
+		Host          string          `json:"add"`
+		Port          any             `json:"port"`
+		ID            string          `json:"id"`
+		PS            string          `json:"ps"`
+		Net           string          `json:"net"`
+		Type          string          `json:"type"`
+		TLS           string          `json:"tls"`
+		SNI           string          `json:"sni"`
+		Path          string          `json:"path"`
+		Host2         string          `json:"host"`
+		Flow          string          `json:"flow"`
+		Scy           string          `json:"scy"`
+		Alpn          string          `json:"alpn"`
+		FP            string          `json:"fp"`
+		PBK           string          `json:"pbk"`
+		SID           string          `json:"sid"`
+		SPX           string          `json:"spx"`
+		AllowInsecure bool            `json:"allowInsecure"`
+		Mode          string          `json:"mode"`
+		Extra         json.RawMessage `json:"extra"`
 	}
 	if err := json.Unmarshal(decoded, &cfg); err != nil {
 		return nil
@@ -237,7 +242,20 @@ func parseVMess(line string) *ProxyRecord {
 	if cfg.AllowInsecure {
 		params["insecure"] = "1"
 	}
+	if cfg.Mode != "" {
+		params["mode"] = cfg.Mode
+	}
+	if len(cfg.Extra) > 0 && string(cfg.Extra) != "null" {
+		normalized, err := xhttp.NormalizeExtra(string(cfg.Extra))
+		if err != nil {
+			return nil
+		}
+		params["extra"] = string(normalized)
+	}
 	normalizeInsecure(params)
+	if !normalizeXHTTP(params) {
+		return nil
+	}
 
 	return &ProxyRecord{
 		Protocol:       VMess,
@@ -277,6 +295,9 @@ func parseTrojan(line string) *ProxyRecord {
 		}
 	}
 	normalizeInsecure(params)
+	if !normalizeXHTTP(params) {
+		return nil
+	}
 
 	return &ProxyRecord{
 		Protocol:       Trojan,
@@ -287,6 +308,22 @@ func parseTrojan(line string) *ProxyRecord {
 		Fragment:       u.Fragment,
 		OriginalLine:   line,
 	}
+}
+
+func normalizeXHTTP(params map[string]string) bool {
+	if params["type"] != "xhttp" && params["type"] != "splithttp" {
+		return true
+	}
+	params["type"] = "xhttp"
+	if params["extra"] == "" {
+		return true
+	}
+	normalized, err := xhttp.NormalizeExtra(params["extra"])
+	if err != nil {
+		return false
+	}
+	params["extra"] = string(normalized)
+	return true
 }
 
 func parseSS(line string) *ProxyRecord {

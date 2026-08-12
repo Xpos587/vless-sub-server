@@ -16,6 +16,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/pipeline"
+	"github.com/michael/vless-sub-server/internal/subview"
 )
 
 const initWaitTimeout = 5 * time.Second
@@ -94,7 +95,7 @@ func refreshSubscriptions() {
 	defer cancel()
 
 	result := service.Refresh(ctx)
-	log.Printf("[refresh] done in %s: parsed=%d resolved=%d good=%d partial=%d dead=%d bandwidth=%d/%d published=%t", time.Since(start), result.Parsed, result.Resolved, result.Good, result.Partial, result.Dead, result.BandwidthSuccesses, result.BandwidthCandidates, result.Published)
+	log.Printf("[refresh] done in %s: parsed=%d resolved=%d good=%d partial=%d dead=%d bandwidth=%d/%d country_direct=%v country_warp=%v published=%t", time.Since(start), result.Parsed, result.Resolved, result.Good, result.Partial, result.Dead, result.BandwidthSuccesses, result.BandwidthCandidates, result.DirectCountrySources, result.WarpCountrySources, result.Published)
 }
 
 func triggerRefresh() {
@@ -132,31 +133,31 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		triggerRefresh()
 	}
 
-	formatParam := r.URL.Query().Get("format")
-	switch formatParam {
-	case "", "url":
-		body := []byte(data.Output)
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		w.Header().Set("X-Last-Refresh", data.LastRefresh.Format(time.RFC3339))
-		w.Write(body)
+	writeSubscriptionResponse(w, r, data)
+}
 
-	case "json":
-		body := data.JSONOutput
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		w.Header().Set("X-Last-Refresh", data.LastRefresh.Format(time.RFC3339))
-		w.Write(body)
-
-	default:
+func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pipeline.CachedData) {
+	options, err := subview.Parse(r.URL.Query())
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": fmt.Sprintf("unsupported format: %s, use 'url' or 'json'", formatParam),
-		})
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
 	}
+	response := subview.Render(data, options)
+	contentType := "text/plain; charset=utf-8"
+	if options.Format == subview.FormatJSON {
+		contentType = "application/json; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Length", strconv.Itoa(len(response.Body)))
+	w.Header().Set("X-Last-Refresh", data.LastRefresh.Format(time.RFC3339))
+	w.Header().Set("X-Warp", map[bool]string{true: "on", false: "off"}[options.Warp])
+	w.Header().Set("X-Country-Filtered", strconv.Itoa(response.Filtered))
+	w.Header().Set("X-Country-Unknown", strconv.Itoa(response.Unknown))
+	w.Header().Set("X-Country-Conflict", strconv.Itoa(response.Conflict))
+	w.Write(response.Body)
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {

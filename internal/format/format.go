@@ -10,19 +10,20 @@ import (
 
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/rename"
+	"github.com/michael/vless-sub-server/internal/xhttp"
 )
 
 type FormatMetadata struct {
-	TotalFetched  int
-	TotalParsed   int
-	TotalSkipped int
+	TotalFetched    int
+	TotalParsed     int
+	TotalSkipped    int
 	TotalDuplicates int
-	TotalAlive    int
-	TotalDead     int
-	SourcesOK     int
-	SourcesFailed int
-	GeoAvailable  int
-	GeoTotal      int
+	TotalAlive      int
+	TotalDead       int
+	SourcesOK       int
+	SourcesFailed   int
+	GeoAvailable    int
+	GeoTotal        int
 }
 
 func FormatOutput(entries []rename.RenamedEntry, meta FormatMetadata) string {
@@ -134,6 +135,14 @@ func reconstructVMess(record parse.ProxyRecord, fragment string) string {
 	}
 	if v := record.QueryParams["spx"]; v != "" {
 		vmConfig["spx"] = v
+	}
+	if v := record.QueryParams["mode"]; v != "" {
+		vmConfig["mode"] = v
+	}
+	if v := record.QueryParams["extra"]; v != "" {
+		if normalized, err := xhttp.NormalizeExtra(v); err == nil {
+			vmConfig["extra"] = normalized
+		}
 	}
 
 	// Remove empty string fields for clean output

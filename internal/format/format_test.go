@@ -138,6 +138,34 @@ func TestReconstructVMessPreservesFields(t *testing.T) {
 	}
 }
 
+func TestReconstructVMessPreservesCompleteXHTTPShareFields(t *testing.T) {
+	record := parse.ProxyRecord{
+		Protocol:       parse.VMess,
+		Host:           "example.com",
+		Port:           443,
+		UUIDOrPassword: "uuid",
+		QueryParams: map[string]string{
+			"type": "xhttp", "security": "tls", "path": "/x", "host": "cdn.example.com", "mode": "packet-up",
+			"extra": `{"xmux":{"maxConcurrency":4},"noSSEHeader":true,"futureOption":{"enabled":true}}`,
+		},
+	}
+	encoded := strings.TrimPrefix(reconstructVMess(record, "xhttp"), "vmess://")
+	for len(encoded)%4 != 0 {
+		encoded += "="
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(decoded, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["mode"] != "packet-up" || cfg["extra"] == nil {
+		t.Fatalf("xHTTP VMess fields lost: %#v", cfg)
+	}
+}
+
 func TestReconstructSSRawURLEncoding(t *testing.T) {
 	record := parse.ProxyRecord{
 		Protocol:       parse.SS,

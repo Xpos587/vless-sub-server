@@ -9,15 +9,19 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/michael/vless-sub-server/internal/config"
+	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/quality"
+	warpconfig "github.com/michael/vless-sub-server/internal/warp"
+	"github.com/michael/vless-sub-server/internal/xhttp"
 
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
@@ -29,16 +33,21 @@ import (
 
 const (
 	geoAPIURL       = "https://ipwho.is/"
+	traceAPIURL     = "https://speed.cloudflare.com/cdn-cgi/trace"
 	healthAPIURL    = "https://speed.cloudflare.com/__down?bytes=0"
 	bandwidthAPIURL = "https://speed.cloudflare.com/__down?bytes="
 )
 
 type ExitProbeResult struct {
-	ExitIP  string
-	ExitLoc string
-	GeoInfo *geo.GeoInfo
-	XrayOK  bool
-	Metrics quality.Metrics
+	ExitIP        string
+	ExitLoc       string
+	GeoInfo       *geo.GeoInfo
+	DirectCountry country.Observation
+	WarpCountry   country.Observation
+	DirectSource  string
+	WarpSource    string
+	XrayOK        bool
+	Metrics       quality.Metrics
 }
 
 func aggregateHealthSamples(samples []time.Duration, requested int, geoOK bool) quality.Metrics {
@@ -49,6 +58,7 @@ type ExitProber struct {
 	cfg       *config.Config
 	instance  *core.Instance
 	proxyTags []string
+	warpTags  []string
 	transport *http.Transport
 	mu        sync.Mutex
 }
@@ -99,6 +109,10 @@ func (ep *ExitProber) StartWithProxies(records []parse.ProxyRecord) error {
 	ep.proxyTags = make([]string, len(records))
 	for i := range records {
 		ep.proxyTags[i] = fmt.Sprintf("proxy_%d_out", i)
+	}
+	ep.warpTags = make([]string, len(records))
+	for i := range records {
+		ep.warpTags[i] = fmt.Sprintf("warp_%d_out", i)
 	}
 
 	return nil
@@ -154,7 +168,21 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 
 	body, geoOK := ep.request(ctx, outboundTag, geoAPIURL, ep.cfg.ExitProbeTimeout)
 	var ipResp geo.IPWhoisResponse
-	geoOK = geoOK && json.Unmarshal(body, &ipResp) == nil && ipResp.Success && ipResp.IP != ""
+	geoOK = geoOK && json.Unmarshal(body, &ipResp) == nil
+	directCountry, geoOK := observationFromIPWhois(ipResp)
+	directSource := "ipwho"
+	if !geoOK {
+		directCountry, directSource = probeCountry(ctx, ep.request, outboundTag, ep.cfg.ExitProbeTimeout, traceWitness)
+		geoOK = directCountry.Valid()
+	}
+	warpCountry := country.Observation{}
+	warpSource := "none"
+	if idx < len(ep.warpTags) {
+		warpCountry, warpSource = probeCountry(ctx, ep.request, ep.warpTags[idx], ep.cfg.ExitProbeTimeout, traceWitness, ipWhoisWitness)
+	}
+	if !geoOK {
+		directSource = "none"
+	}
 
 	sampleCount := ep.cfg.ProbeSampleCount
 	if sampleCount == 0 {
@@ -180,10 +208,43 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		}
 	}
 	metrics := aggregateHealthSamples(samples, sampleCount, geoOK)
-	if !metrics.InternetReachable {
-		return &ExitProbeResult{Metrics: metrics}
+	if idx < len(ep.warpTags) {
+		directCountry, directSource, warpCountry, warpSource = retryMissingCountries(
+			ctx, ep.request, outboundTag, ep.warpTags[idx], sampleTimeout,
+			directCountry, directSource, warpCountry, warpSource, metrics.InternetReachable,
+		)
 	}
+	return buildProbeResult(ipResp, directCountry, directSource, warpCountry, warpSource, metrics)
+}
 
+func retryMissingCountries(
+	ctx context.Context,
+	request countryRequester,
+	directTag, warpTag string,
+	timeout time.Duration,
+	direct country.Observation,
+	directSource string,
+	warp country.Observation,
+	warpSource string,
+	reachable bool,
+) (country.Observation, string, country.Observation, string) {
+	if !reachable {
+		return direct, directSource, warp, warpSource
+	}
+	if !direct.Valid() {
+		if observation, source := probeCountry(ctx, request, directTag, timeout, traceWitness); observation.Valid() {
+			direct, directSource = observation, source+"-retry"
+		}
+	}
+	if !warp.Valid() {
+		if observation, source := probeCountry(ctx, request, warpTag, timeout, traceWitness); observation.Valid() {
+			warp, warpSource = observation, source+"-retry"
+		}
+	}
+	return direct, directSource, warp, warpSource
+}
+
+func buildProbeResult(ipResp geo.IPWhoisResponse, directCountry country.Observation, directSource string, warpCountry country.Observation, warpSource string, metrics quality.Metrics) *ExitProbeResult {
 	city := ipResp.City
 	if city == "" {
 		city = ipResp.Region
@@ -193,18 +254,83 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		isp = ipResp.Connection.Org
 	}
 
-	return &ExitProbeResult{
-		ExitIP:  ipResp.IP,
-		ExitLoc: ipResp.CountryCode,
-		XrayOK:  true,
-		Metrics: metrics,
-		GeoInfo: &geo.GeoInfo{
-			CountryCode: ipResp.CountryCode,
+	result := &ExitProbeResult{
+		ExitIP:        directCountry.IP.String(),
+		ExitLoc:       directCountry.Country,
+		DirectCountry: directCountry,
+		WarpCountry:   warpCountry,
+		DirectSource:  directSource,
+		WarpSource:    warpSource,
+		XrayOK:        metrics.InternetReachable,
+		Metrics:       metrics,
+	}
+	if directCountry.Valid() {
+		result.GeoInfo = &geo.GeoInfo{
+			CountryCode: directCountry.Country,
 			City:        city,
 			ISP:         isp,
-			IP:          ipResp.IP,
-		},
+			IP:          directCountry.IP.String(),
+		}
 	}
+	return result
+}
+
+type countryRequester func(context.Context, string, string, time.Duration) ([]byte, bool)
+type countryWitness struct {
+	source string
+	target string
+	parse  func([]byte) (country.Observation, bool)
+}
+
+var (
+	traceWitness   = countryWitness{source: "cf-trace", target: traceAPIURL, parse: parseCloudflareTrace}
+	ipWhoisWitness = countryWitness{source: "ipwho", target: geoAPIURL, parse: parseIPWhoisBody}
+)
+
+func probeCountry(ctx context.Context, request countryRequester, outboundTag string, timeout time.Duration, witnesses ...countryWitness) (country.Observation, string) {
+	for _, witness := range witnesses {
+		body, ok := request(ctx, outboundTag, witness.target, timeout)
+		if !ok {
+			continue
+		}
+		if observation, valid := witness.parse(body); valid {
+			return observation, witness.source
+		}
+	}
+	return country.Observation{}, "none"
+}
+
+func parseIPWhoisBody(body []byte) (country.Observation, bool) {
+	var response geo.IPWhoisResponse
+	if json.Unmarshal(body, &response) != nil {
+		return country.Observation{}, false
+	}
+	return observationFromIPWhois(response)
+}
+
+func observationFromIPWhois(response geo.IPWhoisResponse) (country.Observation, bool) {
+	ip, err := netip.ParseAddr(strings.TrimSpace(response.IP))
+	code := strings.ToUpper(strings.TrimSpace(response.CountryCode))
+	if err != nil || !response.Success || !country.IsCode(code) {
+		return country.Observation{}, false
+	}
+	return country.Observation{IP: ip.Unmap(), Country: code}, true
+}
+
+func parseCloudflareTrace(body []byte) (country.Observation, bool) {
+	values := make(map[string]string)
+	for _, line := range strings.Split(string(body), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok {
+			values[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	ip, err := netip.ParseAddr(values["ip"])
+	code := strings.ToUpper(values["loc"])
+	if err != nil || !country.IsCode(code) {
+		return country.Observation{}, false
+	}
+	return country.Observation{IP: ip.Unmap(), Country: code}, true
 }
 
 func (ep *ExitProber) request(ctx context.Context, outboundTag, target string, timeout time.Duration) ([]byte, bool) {
@@ -318,7 +444,7 @@ type xrayDialConfig struct {
 
 func buildOutboundOnlyConfig(records []parse.ProxyRecord) []byte {
 	cfg := xrayDialConfig{
-		Log: map[string]any{"loglevel": "warning"},
+		Log: map[string]any{"loglevel": "error"},
 	}
 
 	cfg.Outbounds = append(cfg.Outbounds, xrayOutbound{
@@ -331,10 +457,31 @@ func buildOutboundOnlyConfig(records []parse.ProxyRecord) []byte {
 		outTag := fmt.Sprintf("proxy_%d_out", i)
 		ob := buildOutbound(rec, outTag)
 		cfg.Outbounds = append(cfg.Outbounds, ob)
+		cfg.Outbounds = append(cfg.Outbounds, buildWarpProbeOutbound(i, outTag))
 	}
 
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	return data
+}
+
+func buildWarpProbeOutbound(index int, proxyTag string) xrayOutbound {
+	return xrayOutbound{
+		Tag:      fmt.Sprintf("warp_%d_out", index),
+		Protocol: "wireguard",
+		Settings: map[string]any{
+			"address": []string{warpconfig.Address},
+			"mtu":     1280,
+			"peers": []any{map[string]any{
+				"endpoint":     warpconfig.Endpoint,
+				"publicKey":    warpconfig.PublicKey,
+				"preSharedKey": "",
+			}},
+			"secretKey": warpconfig.SecretKey,
+		},
+		StreamSettings: map[string]any{
+			"sockopt": map[string]any{"dialerProxy": proxyTag},
+		},
+	}
 }
 
 func buildOutbound(rec parse.ProxyRecord, tag string) xrayOutbound {
@@ -529,17 +676,10 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 		}
 		ss["httpupgradeSettings"] = hu
 	case "xhttp":
-		xh := map[string]any{}
-		if v, ok := rec.QueryParams["path"]; ok {
-			xh["path"] = v
+		xh, err := xhttp.SettingsFromParams(rec.QueryParams)
+		if err == nil {
+			ss["xhttpSettings"] = xh
 		}
-		if v, ok := rec.QueryParams["host"]; ok {
-			xh["host"] = v
-		}
-		if v, ok := rec.QueryParams["mode"]; ok {
-			xh["mode"] = v
-		}
-		ss["xhttpSettings"] = xh
 	case "hysteria":
 		hy := map[string]any{
 			"version": 2,

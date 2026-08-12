@@ -2,6 +2,7 @@ package parse
 
 import (
 	"encoding/base64"
+	"net/url"
 	"testing"
 )
 
@@ -125,6 +126,46 @@ func TestVMessMissingFields(t *testing.T) {
 	}
 	if record.QueryParams["flow"] != "xtls-rprx-vision" {
 		t.Fatalf("expected flow=xtls-rprx-vision, got %q", record.QueryParams["flow"])
+	}
+}
+
+func TestVLESSXHTTPPreservesCompleteExtra(t *testing.T) {
+	extra := `{"xmux":{"maxConcurrency":"2-4"},"noGRPCHeader":true,"futureOption":{"enabled":true}}`
+	line := "vless://uuid@example.com:443?type=xhttp&security=reality&path=%2Fx&mode=packet-up&extra=" + url.QueryEscape(extra)
+	record := parseVless(line)
+	if record == nil {
+		t.Fatal("expected valid xHTTP record")
+	}
+	if record.QueryParams["extra"] == "" || record.QueryParams["mode"] != "packet-up" {
+		t.Fatalf("xHTTP params = %#v", record.QueryParams)
+	}
+}
+
+func TestVLESSXHTTPRejectsInvalidExtra(t *testing.T) {
+	if record := parseVless("vless://uuid@example.com:443?type=xhttp&extra=%7Bbroken"); record != nil {
+		t.Fatalf("invalid xHTTP extra accepted: %#v", record)
+	}
+}
+
+func TestDedupKeepsDistinctXHTTPTransports(t *testing.T) {
+	result := ParseAllLines([]string{
+		"vless://uuid@real-host.com:443?type=xhttp&path=%2Fone&extra=%7B%22noSSEHeader%22%3Atrue%7D#One",
+		"vless://uuid@real-host.com:443?type=xhttp&path=%2Ftwo&extra=%7B%22noSSEHeader%22%3Afalse%7D#Two",
+	})
+	if len(result.Records) != 2 || result.Duplicates != 0 {
+		t.Fatalf("records=%d duplicates=%d", len(result.Records), result.Duplicates)
+	}
+}
+
+func TestVMessXHTTPPreservesModeAndExtra(t *testing.T) {
+	vmessJSON := `{"v":"2","ps":"xhttp","add":"example.com","port":443,"id":"uuid","net":"xhttp","tls":"tls","path":"/x","host":"cdn.example.com","mode":"stream-up","extra":{"xmux":{"maxConcurrency":4},"noSSEHeader":true}}`
+	line := "vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON))
+	record := parseVMess(line)
+	if record == nil {
+		t.Fatal("expected xHTTP VMess record")
+	}
+	if record.QueryParams["mode"] != "stream-up" || record.QueryParams["extra"] == "" {
+		t.Fatalf("xHTTP VMess params = %#v", record.QueryParams)
 	}
 }
 

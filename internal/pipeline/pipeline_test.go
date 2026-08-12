@@ -1,14 +1,17 @@
 package pipeline
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/michael/vless-sub-server/internal/config"
+	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/quality"
+	"github.com/michael/vless-sub-server/internal/rename"
 )
 
 func TestCanPublishRejectsEmptyReplacementOfExistingCache(t *testing.T) {
@@ -31,6 +34,29 @@ func TestUpdateRuntimeRetainsFreshBandwidthMeasurement(t *testing.T) {
 	runtime, _ := p.runtime.Get(key)
 	if runtime.Metrics.DownloadMbps != 50 || !runtime.Metrics.BandwidthFresh {
 		t.Fatalf("bandwidth was lost: %#v", runtime.Metrics)
+	}
+}
+
+func TestUpdateRuntimeStabilizesDirectAndWarpCountries(t *testing.T) {
+	p := &Pipeline{runtime: quality.NewStore(), cfg: &config.Config{BandwidthRefreshAfter: time.Hour}}
+	key := "country"
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	metrics := quality.Metrics{InternetReachable: true, SampleCount: 5, SuccessCount: 5, RequestLatencyMS: 100}
+	p.updateRuntime(key, &exitprobe.ExitProbeResult{
+		Metrics:       metrics,
+		DirectCountry: country.Observation{IP: netip.MustParseAddr("203.0.113.1"), Country: "AE"},
+		WarpCountry:   country.Observation{IP: netip.MustParseAddr("198.51.100.1"), Country: "FI"},
+	}, now)
+	runtime, _ := p.runtime.Get(key)
+	if runtime.Countries.DirectV4.Country != "AE" || runtime.Countries.WarpV4.Country != "FI" {
+		t.Fatalf("countries = %#v", runtime.Countries)
+	}
+
+	// Missing observations retain the established route countries.
+	p.updateRuntime(key, &exitprobe.ExitProbeResult{Metrics: metrics}, now.Add(time.Minute))
+	runtime, _ = p.runtime.Get(key)
+	if runtime.Countries.DirectV4.Country != "AE" || runtime.Countries.WarpV4.Country != "FI" {
+		t.Fatalf("countries were erased: %#v", runtime.Countries)
 	}
 }
 
@@ -69,5 +95,32 @@ func TestOutputEntriesExcludeDeadAndOrderByStateThenScore(t *testing.T) {
 	}
 	if result.Dead != 1 {
 		t.Fatalf("dead = %d, want 1", result.Dead)
+	}
+}
+
+func TestCachedReturnsDeepCopiedTypedSnapshot(t *testing.T) {
+	p := &Pipeline{}
+	p.cache.Store(&CachedData{
+		Entries: []CachedEntry{{
+			Entry: rename.RenamedEntry{
+				Record:          parse.ProxyRecord{Host: "one.example", QueryParams: map[string]string{"type": "xhttp", "path": "/one"}},
+				RenamedFragment: "One",
+			},
+			Countries: country.RouteCountries{WarpV4: country.FamilyResult{Available: true, Country: "FI", Status: country.Confirmed}},
+		}},
+		JSONOutput: []byte("[]"),
+	})
+
+	first, ok := p.Cached()
+	if !ok {
+		t.Fatal("cache unavailable")
+	}
+	first.Entries[0].Entry.Record.QueryParams["path"] = "/changed"
+	first.Entries[0].Entry.RenamedFragment = "Changed"
+	first.JSONOutput[0] = '{'
+
+	second, _ := p.Cached()
+	if second.Entries[0].Entry.Record.QueryParams["path"] != "/one" || second.Entries[0].Entry.RenamedFragment != "One" || string(second.JSONOutput) != "[]" {
+		t.Fatalf("cache was mutated through copy: %#v", second)
 	}
 }

@@ -405,6 +405,69 @@ func TestFormatXrayJSON_Empty(t *testing.T) {
 	}
 }
 
+func TestFormatXrayJSONWithOptionsDisablesWarp(t *testing.T) {
+	entries := []rename.RenamedEntry{{
+		Record: parse.ProxyRecord{
+			Protocol:       parse.VLESS,
+			Host:           "1.2.3.4",
+			Port:           443,
+			UUIDOrPassword: "uuid",
+			QueryParams: map[string]string{
+				"type": "xhttp", "security": "reality", "sni": "example.com", "pbk": "key", "path": "/xhttp", "mode": "packet-up",
+				"extra": `{"headers":{"User-Agent":"Mozilla/5.0"},"scMaxEachPostBytes":"500000-1000000","xmux":{"maxConcurrency":4},"downloadSettings":{"address":"download.example.com","port":443,"network":"xhttp","security":"tls","xhttpSettings":{"path":"/down"}},"futureOption":{"enabled":true}}`,
+			},
+		},
+		RenamedFragment: "Direct",
+	}}
+
+	config := parseSingleConfig(t, FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: false}))
+	outbounds := config["outbounds"].([]any)
+	if len(outbounds) != 3 {
+		t.Fatalf("outbounds = %d, want proxy+direct+block", len(outbounds))
+	}
+	for _, raw := range outbounds {
+		if raw.(map[string]any)["protocol"] == "wireguard" {
+			t.Fatal("direct JSON contains WARP outbound")
+		}
+	}
+	if outbounds[0].(map[string]any)["tag"] != "proxy-1" {
+		t.Fatal("proxy must remain the first outbound")
+	}
+	stream := outbounds[0].(map[string]any)["streamSettings"].(map[string]any)
+	if stream["network"] != "xhttp" || stream["xhttpSettings"].(map[string]any)["path"] != "/xhttp" {
+		t.Fatalf("xHTTP settings regressed: %#v", stream)
+	}
+	xhttpSettings := stream["xhttpSettings"].(map[string]any)
+	if xhttpSettings["mode"] != "packet-up" {
+		t.Fatalf("xHTTP mode lost: %#v", xhttpSettings)
+	}
+	extra, ok := xhttpSettings["extra"].(map[string]any)
+	if !ok {
+		t.Fatalf("xHTTP extra missing: %#v", xhttpSettings)
+	}
+	for _, key := range []string{"headers", "scMaxEachPostBytes", "xmux", "downloadSettings", "futureOption"} {
+		if _, ok := extra[key]; !ok {
+			t.Fatalf("xHTTP extra lost %s: %#v", key, extra)
+		}
+	}
+	rules := config["routing"].(map[string]any)["rules"].([]any)
+	catchAll := rules[len(rules)-1].(map[string]any)
+	if catchAll["outboundTag"] != "proxy-1" {
+		t.Fatalf("direct catch-all = %#v", catchAll)
+	}
+}
+
+func TestFormatXrayJSONCompatibilityWrapperEnablesWarp(t *testing.T) {
+	entries := []rename.RenamedEntry{{
+		Record: parse.ProxyRecord{Protocol: parse.VLESS, Host: "1.2.3.4", Port: 443, UUIDOrPassword: "uuid", QueryParams: map[string]string{"type": "tcp"}},
+	}}
+	legacy := FormatXrayJSON(entries, FormatMetadata{})
+	explicit := FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: true})
+	if string(legacy) != string(explicit) {
+		t.Fatal("compatibility wrapper changed default JSON")
+	}
+}
+
 func TestFormatXrayJSON_PQEncryption(t *testing.T) {
 	entries := []rename.RenamedEntry{
 		{

@@ -23,15 +23,16 @@ podman run -e PORT=8080 -p 8080:8080 vless-sub-server
 ## Pipeline
 
 ```
-fetch → stale-source merge → parse → DNS → xray geo + health samples
+fetch → stale-source merge → parse → DNS → exact-chain route geo + health samples
   → quality state + EWMA → bounded bandwidth stage → rename → format → atomic cache swap
 ```
 
 1. **fetch** — concurrent HTTP GET on subscription URLs, base64/sing-box JSON decode
 2. **parse** — VLESS/VMess/Trojan/SS URL → `ProxyRecord`
 3. **DNS** — miekg/dns A-record resolve, retry once, detect private IPs
-4. **exit-IP + health probe** — xray-core in-process: `ipwho.is` plus five
-   sequential Cloudflare health samples per proxy
+4. **exit-IP + health probe** — xray-core in-process: direct and final
+   `proxy -> WARP` egress observations plus five sequential Cloudflare health
+   samples per proxy
 5. **quality** — median latency, loss, jitter, EWMA score, and recovery state
 6. **bandwidth** — rotating, preselected routes only; bounded by a global byte budget
 7. **format + publish** — URL and JSON share one ordered snapshot; empty or
@@ -51,6 +52,24 @@ xray-core is imported as a Go library, not a subprocess. The `core.Instance` is 
 ### Output URL reconstruction
 `format.go` reconstructs proxy URLs from `ProxyRecord` + renamed fragment. Query params are preserved as-is. The `encryption` field in output URLs must reflect the original value (not xray's `"none"` probing override).
 
+### Complete xHTTP support
+
+xHTTP is an end-to-end contract across `fetch`, `parse`, `exitprobe`, URL
+reconstruction, and xray JSON formatting. Do not add an xHTTP field to only one
+transport table. Use `internal/xhttp`: explicit share-link fields are
+`type=xhttp`, `host`, `path`, and `mode`; every other `xhttpSettings` field is
+serialized losslessly into the JSON-object `extra`. Malformed `extra` is
+rejected. Preserve unknown fields for forward compatibility.
+
+### Route-country semantics
+
+Country filters use observed route egress, never host registration, ASN country,
+or Cloudflare colo. `warp=off` selects direct proxy country; `warp=on` selects
+the final WARP country measured through the per-proxy WireGuard outbound with
+`dialerProxy=proxy_N_out`. A missing geo observation retains the last runtime
+country. With `exclude`, unknown/conflict fails closed; without it, entries stay
+available.
+
 ## Architecture
 
 ```
@@ -63,10 +82,14 @@ internal/
   exitprobe/exitprobe.go       — xray-core integration, exit-IP detection, geo lookup
   pipeline/pipeline.go         — refresh orchestration and publication policy
   quality/                     — metrics, scoring, state machine, runtime history
+  country/                     — direct/WARP family evidence and stabilization
   geo/geo.go                   — GeoInfo/IPWhoisResponse types
   rename/rename.go             — rename with flag+city+ISP, dedup
   format/format.go             — output formatting with header + URL reconstruction
   format/xrayjson.go           — per-proxy xray-core JSON config array (v2rayNG format)
+  subview/                     — URL query contract and snapshot rendering
+  warp/                        — shared WARP settings
+  xhttp/                       — lossless xHTTP settings codec
 ```
 
 ## Environment Variables
@@ -96,6 +119,9 @@ internal/
 
 - `GET /sub` — subscription output (base64 lines with header)
 - `GET /sub?format=json` — JSON array of xray-core configs (v2rayNG/MahsaNG compatible)
+- `GET /sub?format=json&warp=off` — direct proxy JSON without WireGuard
+- `GET /sub?warp=off&exclude=fi,ro` — direct-country filtered URL output
+- `GET /sub?format=json&warp=on&exclude=fi,ro` — final-WARP-country filtered JSON
 - `GET /health` — returns `ok`
 
 ## JSON Format (`?format=json`)

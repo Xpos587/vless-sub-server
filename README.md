@@ -14,8 +14,10 @@ Standalone Go HTTP server that fetches proxy subscriptions, probes exit-IPs thro
 - Renames proxies with flag + city + ISP (e.g. `🇩🇪 Frankfurt (Hetzner)`)
 - Serves subscription output with header stats
 - JSON output for v2rayNG / MahsaNG (xray-core config array)
-- Cloudflare WARP chain: traffic routed through proxy → WARP → destination
-- Deduplicates proxies by name
+- Optional Cloudflare WARP chain: traffic routed through proxy → WARP → destination
+- Request-time country exclusion based on the observed direct or final WARP egress
+- Complete xHTTP share-link support, including lossless `extra` JSON
+- Deduplicates only identical proxy credentials and transport parameters
 
 ## Quick Start
 
@@ -44,7 +46,22 @@ podman run \
 |----------|-------------|
 | `GET /sub` | Subscription output (base64 lines with header) |
 | `GET /sub?format=json` | JSON array of xray-core configs (v2rayNG/MahsaNG) |
+| `GET /sub?warp=off&exclude=fi,ro` | URL output excluding direct egress countries |
+| `GET /sub?format=json&warp=on&exclude=fi,ro` | WARP JSON excluding final WARP egress countries |
 | `GET /health` | Health check, returns `ok` |
+
+Query rules:
+
+- `format=url|json`; the default is `url`.
+- `warp=off|on`; URL defaults to `off`, JSON defaults to `on` for compatibility.
+- `warp=on` requires `format=json` because a URL link cannot encode the WARP hop.
+- `exclude` accepts comma-separated ISO 3166-1 alpha-2 codes, case-insensitively.
+- With `warp=off`, exclusion uses the country websites observe through the direct proxy.
+- With `warp=on`, exclusion uses the final WARP egress country after `proxy -> WARP`.
+- Unknown or conflicting country evidence fails closed only when `exclude` is present.
+
+Responses expose aggregate diagnostics only: `X-Warp`, `X-Country-Filtered`,
+`X-Country-Unknown`, and `X-Country-Conflict`.
 
 ## JSON Format (`?format=json`)
 
@@ -75,18 +92,36 @@ Returns a JSON array where each element is a complete xray-core config for one p
 
 Traffic flow: inbound → routing catch-all rule sends to `warp-out-N` → WARP connects through `proxy-N` via `dialerProxy` → WARP tunnel → destination. v2rayNG imports each element as a separate profile. MahsaNG supports this format via manual import.
 
+`?format=json&warp=off` omits the WireGuard outbound and routes the catch-all
+directly to `proxy-N`.
+
+## xHTTP
+
+xHTTP is preserved through upstream JSON conversion, URL parsing, in-process
+probing, URL reconstruction, and generated JSON. The share-link fields
+`type=xhttp`, `host`, `path`, and `mode` remain explicit. All other
+`xhttpSettings` fields are carried losslessly in the URL's `extra` JSON object,
+including XMUX, ranges, headers, download settings, padding, placement settings,
+and unknown fields from newer xray-core versions.
+
+Malformed or non-object `extra` is rejected before probing. The generated probe
+and client configs use the same xHTTP codec, preventing the prior failure mode
+where URL output worked but JSON silently omitted `xhttpSettings`.
+
 ## Pipeline
 
 ```
-fetch → stale-source merge → parse → DNS → xray geo + health samples
+fetch → stale-source merge → parse → DNS → exact-chain route geo + health samples
   → quality state + EWMA → bounded bandwidth stage → rename → format → atomic cache swap
 ```
 
 1. **fetch** — concurrent HTTP GET, base64/sing-box JSON decode
 2. **parse** — protocol URL → `ProxyRecord`
 3. **DNS** — miekg/dns resolve, private IP detection
-4. **exit-IP + health probe** — xray-core in-process: one `ipwho.is` geo
-   request and five sequential `speed.cloudflare.com/__down?bytes=0` samples
+4. **exit-IP + health probe** — xray-core in-process: direct and `proxy -> WARP`
+   egress observations plus five sequential `speed.cloudflare.com/__down?bytes=0`
+   samples; direct geo uses ipwho.is then Cloudflare trace, while WARP geo uses
+   Cloudflare trace then ipwho.is; trace `colo` is never treated as a country
 5. **quality** — median latency, loss, jitter, EWMA score, and recovery state
 6. **bandwidth** — at most a configured global byte budget, selected before any
    download begins; failed bandwidth measurements are neutral
@@ -131,10 +166,14 @@ internal/
   exitprobe/exitprobe.go        — xray-core integration, exit-IP, geo lookup
   pipeline/pipeline.go          — refresh orchestration and atomic publication policy
   quality/                      — metrics, scoring, state machine, runtime history
+  country/                      — route-country evidence and stabilization
   geo/geo.go                    — GeoInfo types
   rename/rename.go              — rename with flag+city+ISP, dedup
   format/format.go              — subscription output with header
   format/xrayjson.go            — per-proxy xray-core JSON config array
+  subview/                      — query validation, filtering, response rendering
+  warp/                         — shared WARP outbound parameters
+  xhttp/                        — lossless xHTTP share-link codec
 ```
 
 ## License

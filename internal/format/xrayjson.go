@@ -7,21 +7,23 @@ import (
 
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/rename"
+	"github.com/michael/vless-sub-server/internal/warp"
+	"github.com/michael/vless-sub-server/internal/xhttp"
 )
 
-// WARP credentials — from wgcf registration (refresh when expired)
-const (
-	warpSecretKey = "KGRrQBayYNRfVU8iecN8VmUF5bgOQ3wmJXOscg53LFM="
-	warpPublicKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
-	warpEndpoint  = "162.159.192.1:2408"
-	warpAddress   = "172.16.0.2/32"
-)
+type XrayJSONOptions struct {
+	Warp bool
+}
 
 // FormatXrayJSON produces a JSON array of complete xray-core configs, one per proxy.
 // Each config includes: remarks, inbounds (socks+http), outbounds (proxy+warp+direct+block), routing.
 // v2rayNG detects JSON config by checking string contains "inbounds" && "outbounds" && "routing".
 // It then parses as Array<V2rayConfig> and creates a separate profile per element.
 func FormatXrayJSON(entries []rename.RenamedEntry, meta FormatMetadata) []byte {
+	return FormatXrayJSONWithOptions(entries, meta, XrayJSONOptions{Warp: true})
+}
+
+func FormatXrayJSONWithOptions(entries []rename.RenamedEntry, meta FormatMetadata, options XrayJSONOptions) []byte {
 	if len(entries) == 0 {
 		result, _ := json.Marshal([]any{})
 		return result
@@ -36,12 +38,12 @@ func FormatXrayJSON(entries []rename.RenamedEntry, meta FormatMetadata) []byte {
 		}
 
 		config := map[string]any{
-			"remarks":  e.RenamedFragment,
-			"log":      map[string]any{"loglevel": "warning"},
+			"remarks":   e.RenamedFragment,
+			"log":       map[string]any{"loglevel": "warning"},
 			"inbounds":  buildInbounds(i + 1),
-			"outbounds": buildPerProxyOutbounds(ob, i+1),
-			"routing":   buildRoutingRules(i + 1),
-			"dns":      map[string]any{},
+			"outbounds": buildPerProxyOutbounds(ob, i+1, options.Warp),
+			"routing":   buildRoutingRules(i+1, options.Warp),
+			"dns":       map[string]any{},
 		}
 		configs = append(configs, config)
 	}
@@ -84,10 +86,12 @@ func buildInbounds(index int) []any {
 // protocol, so proxy-N must come first for correct detection. Traffic is
 // routed to warp-out-N via catch-all routing rule. WARP connects through
 // proxy-N via dialerProxy → chain: proxy → WARP → destination.
-func buildPerProxyOutbounds(proxyOb map[string]any, index int) []any {
-	return []any{
-		proxyOb,
-		buildWarpOutbound(index),
+func buildPerProxyOutbounds(proxyOb map[string]any, index int, warpEnabled bool) []any {
+	outbounds := []any{proxyOb}
+	if warpEnabled {
+		outbounds = append(outbounds, buildWarpOutbound(index))
+	}
+	return append(outbounds,
 		map[string]any{
 			"protocol": "freedom",
 			"tag":      "direct",
@@ -96,7 +100,7 @@ func buildPerProxyOutbounds(proxyOb map[string]any, index int) []any {
 			"protocol": "blackhole",
 			"tag":      "block",
 		},
-	}
+	)
 }
 
 func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
@@ -176,8 +180,8 @@ func buildOutbound(entry rename.RenamedEntry, index int) map[string]any {
 	case parse.Hysteria2:
 		ob["protocol"] = "hysteria"
 		ob["settings"] = map[string]any{
-			"address": r.Host,
-			"port":    r.Port,
+			"address":  r.Host,
+			"port":     r.Port,
 			"password": r.UUIDOrPassword,
 			"version":  2,
 		}
@@ -213,7 +217,7 @@ func buildStreamSettings(r parse.ProxyRecord) map[string]any {
 		}
 		hy := map[string]any{
 			"version": 2,
-			"auth":     r.UUIDOrPassword,
+			"auth":    r.UUIDOrPassword,
 		}
 		if obfs := qp["obfs"]; obfs != "" {
 			hy["obfs"] = obfs
@@ -285,6 +289,8 @@ func mapTransport(t string) string {
 		return "h2"
 	case "httpupgrade":
 		return "httpupgrade"
+	case "xhttp", "splithttp":
+		return "xhttp"
 	case "kcp":
 		return "mkcp"
 	case "tcp":
@@ -315,6 +321,8 @@ func xrayTransportKey(network string) string {
 		return "httpSettings"
 	case "httpupgrade":
 		return "httpupgradeSettings"
+	case "xhttp":
+		return "xhttpSettings"
 	case "mkcp":
 		return "kcpSettings"
 	default:
@@ -368,6 +376,13 @@ func buildTransportSettings(network string, qp map[string]string) map[string]any
 			hu["host"] = host
 		}
 		return hu
+
+	case "xhttp":
+		settings, err := xhttp.SettingsFromParams(qp)
+		if err != nil {
+			return nil
+		}
+		return settings
 
 	default:
 		return nil
@@ -431,14 +446,14 @@ func buildWarpOutbound(index int) map[string]any {
 		"tag":      fmt.Sprintf("warp-out-%d", index),
 		"protocol": "wireguard",
 		"settings": map[string]any{
-			"address": []string{warpAddress},
+			"address": []string{warp.Address},
 			"mtu":     1280,
 			"peers": []any{map[string]any{
-				"endpoint":     warpEndpoint,
-				"publicKey":    warpPublicKey,
+				"endpoint":     warp.Endpoint,
+				"publicKey":    warp.PublicKey,
 				"preSharedKey": "",
 			}},
-			"secretKey": warpSecretKey,
+			"secretKey": warp.SecretKey,
 		},
 		"streamSettings": map[string]any{
 			"sockopt": map[string]any{
@@ -448,8 +463,11 @@ func buildWarpOutbound(index int) map[string]any {
 	}
 }
 
-func buildRoutingRules(index int) map[string]any {
-	warpTag := fmt.Sprintf("warp-out-%d", index)
+func buildRoutingRules(index int, warpEnabled bool) map[string]any {
+	catchAllTag := fmt.Sprintf("proxy-%d", index)
+	if warpEnabled {
+		catchAllTag = fmt.Sprintf("warp-out-%d", index)
+	}
 	return map[string]any{
 		"domainStrategy": "IPIfNonMatch",
 		"rules": []any{
@@ -496,7 +514,7 @@ func buildRoutingRules(index int) map[string]any {
 			},
 			map[string]any{
 				"type":        "field",
-				"outboundTag": warpTag,
+				"outboundTag": catchAllTag,
 				"port":        "0-65535",
 			},
 		},

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/michael/vless-sub-server/internal/config"
+	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/fetch"
@@ -21,14 +22,29 @@ import (
 type CachedData struct {
 	Output      string
 	JSONOutput  []byte
+	Entries     []CachedEntry
+	Metadata    format.FormatMetadata
 	LastRefresh time.Time
 }
 
+type CachedEntry struct {
+	Entry     rename.RenamedEntry
+	Countries country.RouteCountries
+}
+
+type outputEntry struct {
+	Record    parse.ProxyRecord
+	Geo       *geo.GeoInfo
+	IsLAN     bool
+	Countries country.RouteCountries
+}
+
 type RefreshResult struct {
-	Published                               bool
-	Parsed, Resolved                        int
-	Good, Partial, Dead                     int
-	BandwidthCandidates, BandwidthSuccesses int
+	Published                                bool
+	Parsed, Resolved                         int
+	Good, Partial, Dead                      int
+	BandwidthCandidates, BandwidthSuccesses  int
+	DirectCountrySources, WarpCountrySources map[string]int
 }
 
 type Pipeline struct {
@@ -52,6 +68,7 @@ func (p *Pipeline) Cached() (*CachedData, bool) {
 	}
 	data := *(v.(*CachedData))
 	data.JSONOutput = append([]byte(nil), data.JSONOutput...)
+	data.Entries = cloneCachedEntries(data.Entries)
 	return &data, true
 }
 
@@ -72,7 +89,7 @@ func StateRank(state string) int {
 
 func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	now := time.Now()
-	result := RefreshResult{}
+	result := RefreshResult{DirectCountrySources: make(map[string]int), WarpCountrySources: make(map[string]int)}
 	fetched := fetch.FetchSubscriptions(ctx, p.cfg.SubscriptionURLs, 15*time.Second)
 	lines := p.sourceCache.Merge(now, fetched, p.cfg.SourceStaleMaxAge)
 	parsed := parse.ParseAllLines(lines)
@@ -97,6 +114,15 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	}
 	defer ep.Stop()
 	probes := ep.ProbeAll(ctx, probed)
+	for _, probe := range probes {
+		if probe == nil {
+			result.DirectCountrySources["none"]++
+			result.WarpCountrySources["none"]++
+			continue
+		}
+		result.DirectCountrySources[probe.DirectSource]++
+		result.WarpCountrySources[probe.WarpSource]++
+	}
 	if !hasReachabilityWitness(probes) {
 		return result // The shared measurement path failed; preserve prior state and cache.
 	}
@@ -140,7 +166,19 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	if !CanPublish(len(entries), hasExisting) {
 		return result
 	}
-	renamed := rename.RenameAll(entries)
+	renameInput := make([]struct {
+		Record parse.ProxyRecord
+		Geo    *geo.GeoInfo
+		IsLAN  bool
+	}, len(entries))
+	for i, entry := range entries {
+		renameInput[i] = struct {
+			Record parse.ProxyRecord
+			Geo    *geo.GeoInfo
+			IsLAN  bool
+		}{entry.Record, entry.Geo, entry.IsLAN}
+	}
+	renamed := rename.RenameAll(renameInput)
 	sourcesOK := 0
 	for _, source := range fetched {
 		if source.Status == "ok" {
@@ -148,7 +186,11 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 		}
 	}
 	meta := format.FormatMetadata{TotalFetched: len(lines), TotalParsed: len(filtered), TotalSkipped: parsed.Skipped, TotalDuplicates: parsed.Duplicates, TotalAlive: len(renamed), TotalDead: result.Dead, SourcesOK: sourcesOK, SourcesFailed: len(fetched) - sourcesOK, GeoAvailable: geoAvailable, GeoTotal: len(probed)}
-	p.cache.Store(&CachedData{Output: format.FormatOutput(renamed, meta), JSONOutput: format.FormatXrayJSON(renamed, meta), LastRefresh: now})
+	cachedEntries := make([]CachedEntry, len(renamed))
+	for i, entry := range renamed {
+		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), Countries: entries[i].Countries}
+	}
+	p.cache.Store(&CachedData{Entries: cachedEntries, Metadata: meta, Output: format.FormatOutput(renamed, meta), JSONOutput: format.FormatXrayJSON(renamed, meta), LastRefresh: now})
 	result.Published = true
 	p.dnsCache.Purge()
 	return result
@@ -184,6 +226,10 @@ func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, n
 	}
 	if probe != nil && probe.GeoInfo != nil {
 		runtime.GeoInfo = cloneGeo(probe.GeoInfo)
+	}
+	if probe != nil {
+		runtime.Countries = country.Apply(runtime.Countries, false, probe.DirectCountry, now)
+		runtime.Countries = country.Apply(runtime.Countries, true, probe.WarpCountry, now)
 	}
 	p.runtime.Set(runtime)
 }
@@ -221,11 +267,7 @@ func (p *Pipeline) markBandwidthAttempt(key string, now time.Time) {
 	p.runtime.Set(runtime)
 }
 
-func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, result *RefreshResult) ([]struct {
-	Record parse.ProxyRecord
-	Geo    *geo.GeoInfo
-	IsLAN  bool
-}, int) {
+func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, result *RefreshResult) ([]outputEntry, int) {
 	type item struct {
 		record  parse.ProxyRecord
 		runtime quality.Runtime
@@ -258,17 +300,9 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 		}
 		return left.ScoreEWMA < right.ScoreEWMA
 	})
-	entries := make([]struct {
-		Record parse.ProxyRecord
-		Geo    *geo.GeoInfo
-		IsLAN  bool
-	}, 0, len(items))
+	entries := make([]outputEntry, 0, len(items))
 	for _, item := range items {
-		entries = append(entries, struct {
-			Record parse.ProxyRecord
-			Geo    *geo.GeoInfo
-			IsLAN  bool
-		}{item.record, item.geo, item.lan})
+		entries = append(entries, outputEntry{Record: item.record, Geo: item.geo, IsLAN: item.lan, Countries: item.runtime.Countries})
 	}
 	return entries, geoAvailable
 }
@@ -301,4 +335,21 @@ func cloneGeo(info *geo.GeoInfo) *geo.GeoInfo {
 	}
 	copy := *info
 	return &copy
+}
+
+func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
+	result := make([]CachedEntry, len(entries))
+	for i, entry := range entries {
+		result[i] = CachedEntry{Entry: cloneRenamedEntry(entry.Entry), Countries: entry.Countries}
+	}
+	return result
+}
+
+func cloneRenamedEntry(entry rename.RenamedEntry) rename.RenamedEntry {
+	copy := entry
+	copy.Record.QueryParams = make(map[string]string, len(entry.Record.QueryParams))
+	for key, value := range entry.Record.QueryParams {
+		copy.Record.QueryParams[key] = value
+	}
+	return copy
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/michael/vless-sub-server/internal/config"
+	"github.com/michael/vless-sub-server/internal/xhttp"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -223,14 +224,12 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 
 		// stream settings
 		if xs, ok := stream["xhttpSettings"].(map[string]any); ok {
-			if p, ok := xs["path"].(string); ok {
-				params.Set("path", p)
+			xhttpParams, err := xhttp.ParamsFromSettings(xs)
+			if err != nil {
+				return ""
 			}
-			if m, ok := xs["mode"].(string); ok {
-				params.Set("mode", m)
-			}
-			if h, ok := xs["host"].(string); ok {
-				params.Set("host", h)
+			for key, value := range xhttpParams {
+				params.Set(key, value)
 			}
 		}
 		if ws, ok := stream["wsSettings"].(map[string]any); ok {
@@ -328,11 +327,20 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 			}
 		}
 		if xs, ok := stream["xhttpSettings"].(map[string]any); ok {
-			if p, ok := xs["path"].(string); ok {
-				vmConfig["path"] = p
+			xhttpParams, err := xhttp.ParamsFromSettings(xs)
+			if err != nil {
+				return ""
 			}
-			if h, ok := xs["host"].(string); ok {
-				vmConfig["host"] = h
+			for key, value := range xhttpParams {
+				if key == "extra" {
+					normalized, err := xhttp.NormalizeExtra(value)
+					if err != nil {
+						return ""
+					}
+					vmConfig[key] = normalized
+					continue
+				}
+				vmConfig[key] = value
 			}
 		}
 		if gs, ok := stream["grpcSettings"].(map[string]any); ok {
@@ -404,14 +412,12 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 
 		// Transport settings
 		if xs, ok := stream["xhttpSettings"].(map[string]any); ok {
-			if p, ok := xs["path"].(string); ok {
-				params.Set("path", p)
+			xhttpParams, err := xhttp.ParamsFromSettings(xs)
+			if err != nil {
+				return ""
 			}
-			if m, ok := xs["mode"].(string); ok {
-				params.Set("mode", m)
-			}
-			if h, ok := xs["host"].(string); ok {
-				params.Set("host", h)
+			for key, value := range xhttpParams {
+				params.Set(key, value)
 			}
 		}
 		if ws, ok := stream["wsSettings"].(map[string]any); ok {
