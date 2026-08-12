@@ -288,16 +288,16 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		}
 
 		vmConfig := map[string]any{
-			"v":   "2",
-			"ps":  remark,
-			"add": address,
+			"v":    "2",
+			"ps":   remark,
+			"add":  address,
 			"port": port,
-			"id":  uuid,
-			"aid": 0,
-			"net": net,
+			"id":   uuid,
+			"aid":  0,
+			"net":  net,
 			"type": net,
-			"tls": "",
-			"sni": sni,
+			"tls":  "",
+			"sni":  sni,
 			"path": "/",
 			"host": "",
 		}
