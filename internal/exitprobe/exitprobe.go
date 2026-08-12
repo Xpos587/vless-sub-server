@@ -16,9 +16,10 @@ import (
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
+	"github.com/michael/vless-sub-server/internal/quality"
 
-	"github.com/xtls/xray-core/common/session"
 	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -32,6 +33,11 @@ type ExitProbeResult struct {
 	ExitLoc string
 	GeoInfo *geo.GeoInfo
 	XrayOK  bool
+	Metrics quality.Metrics
+}
+
+func aggregateHealthSamples(samples []time.Duration, requested int, geoOK bool) quality.Metrics {
+	return quality.Aggregate(samples, requested-len(samples), requested, geoOK)
 }
 
 type ExitProber struct {
@@ -52,7 +58,7 @@ func NewExitProber(cfg *config.Config) *ExitProber {
 			IdleConnTimeout:       90 * time.Second,
 			DialContext:           (&net.Dialer{Timeout: cfg.ExitProbeTimeout, KeepAlive: 30 * time.Second}).DialContext,
 			TLSHandshakeTimeout:   cfg.ExitProbeTimeout,
-			ResponseHeaderTimeout:  cfg.ExitProbeTimeout,
+			ResponseHeaderTimeout: cfg.ExitProbeTimeout,
 		},
 	}
 }
@@ -151,7 +157,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 		},
 		TLSHandshakeTimeout:   ep.cfg.ExitProbeTimeout,
 		ResponseHeaderTimeout: ep.cfg.ExitProbeTimeout,
-		IdleConnTimeout:        90 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
 	}
 	client := &http.Client{Transport: transport}
 
@@ -445,7 +451,7 @@ func buildStreamSettings(rec parse.ProxyRecord) map[string]any {
 	case "hysteria":
 		hy := map[string]any{
 			"version": 2,
-			"auth":     rec.UUIDOrPassword,
+			"auth":    rec.UUIDOrPassword,
 		}
 		ss["hysteriaSettings"] = hy
 	}

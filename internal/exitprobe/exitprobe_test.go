@@ -3,9 +3,28 @@ package exitprobe
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/michael/vless-sub-server/internal/parse"
 )
+
+func TestAggregateHealthSamplesKeepsGeoOnlyProxyReachable(t *testing.T) {
+	metrics := aggregateHealthSamples(nil, 5, true)
+	if !metrics.GeoOK || !metrics.InternetReachable || metrics.Blackhole {
+		t.Fatalf("geo-only metrics = %#v", metrics)
+	}
+}
+
+func TestAggregateHealthSamplesCalculatesMedian(t *testing.T) {
+	metrics := aggregateHealthSamples(
+		[]time.Duration{100 * time.Millisecond, 130 * time.Millisecond, 110 * time.Millisecond},
+		5,
+		true,
+	)
+	if metrics.RequestLatencyMS != 110 || metrics.FailurePct != 40 {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+}
 
 func TestBuildOutboundSSProtocol(t *testing.T) {
 	rec := parse.ProxyRecord{
