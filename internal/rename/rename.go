@@ -48,7 +48,9 @@ func RenameAll(records []struct {
 		var baseName string
 		gatewayKey := credentialGatewayKey(r.Record)
 		credentialRouted := gatewayCounts[gatewayKey] > 1 && len(gatewayNames[gatewayKey]) > 1
-		if credentialRouted && r.Record.Fragment != "" {
+		if isAutoRoute(r.Record.Fragment) {
+			baseName = credentialRouteName(r.Record.Fragment, r.Geo)
+		} else if credentialRouted && r.Record.Fragment != "" {
 			baseName = credentialRouteName(r.Record.Fragment, r.Geo)
 		} else if r.Geo != nil {
 			baseName = buildName(r.Geo)
@@ -73,6 +75,13 @@ func RenameAll(records []struct {
 
 func credentialRouteName(fragment string, info *geo.GeoInfo) string {
 	name := strings.TrimSpace(fragment)
+	if isAutoRoute(name) {
+		isp := "Unknown"
+		if info != nil && info.ISP != "" {
+			isp = info.ISP
+		}
+		return fmt.Sprintf("АВТОВЫБОР (%s)", isp)
+	}
 	if fields := strings.Fields(name); len(fields) > 0 && isFlag(fields[0]) {
 		name = strings.TrimSpace(strings.TrimPrefix(name, fields[0]))
 	}
@@ -93,6 +102,11 @@ func credentialRouteName(fragment string, info *geo.GeoInfo) string {
 		isp = info.ISP
 	}
 	return fmt.Sprintf("%s %s (%s)", flag, name, isp)
+}
+
+func isAutoRoute(name string) bool {
+	name = strings.ToLower(name)
+	return strings.Contains(name, "автовыбор") || strings.Contains(name, "auto select") || strings.Contains(name, "auto-select")
 }
 
 func isFlag(value string) bool {

@@ -51,6 +51,21 @@ func TestRenameAllStillUsesObservedGeoForIndependentServers(t *testing.T) {
 	}
 }
 
+func TestRenameAllDoesNotInventCountryForAutoRoute(t *testing.T) {
+	records := []struct {
+		Record parse.ProxyRecord
+		Geo    *geo.GeoInfo
+		IsLAN  bool
+	}{
+		{Record: parse.ProxyRecord{Protocol: parse.VLESS, Host: "170.168.90.1", Port: 2083, UUIDOrPassword: "auto", Fragment: "🇪🇺 АВТОВЫБОР - VPN 10 Гбит ⚡"}, Geo: &geo.GeoInfo{CountryCode: "HK", City: "Hong Kong", ISP: "VolnaApp LLP"}},
+	}
+
+	got := RenameAll(records)
+	if got[0].RenamedFragment != "АВТОВЫБОР (VolnaApp LLP)" {
+		t.Fatalf("name = %q", got[0].RenamedFragment)
+	}
+}
+
 func cloneParams(source map[string]string) map[string]string {
 	result := make(map[string]string, len(source))
 	for key, value := range source {
