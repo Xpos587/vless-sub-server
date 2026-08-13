@@ -26,6 +26,18 @@ func TestLoadReadsProbeSamplingValues(t *testing.T) {
 	}
 }
 
+func TestLoadUsesDirectExitObserverByDefault(t *testing.T) {
+	t.Setenv("SUBSCRIPTION_URLS", "https://example.test/sub")
+	t.Setenv("HWID", "test")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExitObserverURL != "https://exit-observer.hypcat.net/_exit" {
+		t.Fatalf("ExitObserverURL = %q", cfg.ExitObserverURL)
+	}
+}
+
 func TestLoadRejectsBandwidthBudgetAboveHardLimit(t *testing.T) {
 	t.Setenv("SUBSCRIPTION_URLS", "https://example.test/sub")
 	t.Setenv("HWID", "test")

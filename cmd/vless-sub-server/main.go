@@ -206,9 +206,9 @@ func handleExitObservation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	forwarded := r.Header.Values("X-Forwarded-For")
-	for i := len(forwarded) - 1; i >= 0; i-- {
+	for i := 0; i < len(forwarded); i++ {
 		parts := strings.Split(forwarded[i], ",")
-		for j := len(parts) - 1; j >= 0; j-- {
+		for j := 0; j < len(parts); j++ {
 			ip, err := netip.ParseAddr(strings.TrimSpace(parts[j]))
 			if err == nil && ip.IsValid() {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
