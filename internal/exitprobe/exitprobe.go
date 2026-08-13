@@ -32,6 +32,7 @@ import (
 )
 
 const (
+	ipAPIGeoURL     = "http://ip-api.com/json?fields=status,countryCode,city,regionName,isp,org,query"
 	geoAPIURL       = "https://ipwho.is/"
 	ipsbGeoAPIURL   = "https://api.ip.sb/geoip"
 	traceAPIURL     = "https://speed.cloudflare.com/cdn-cgi/trace"
@@ -207,15 +208,24 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 
 	outboundTag := ep.proxyTags[idx]
 
-	body, geoOK := ep.request(ctx, outboundTag, geoAPIURL, ep.cfg.ExitProbeTimeout)
-	var ipResp geo.IPWhoisResponse
-	geoOK = geoOK && json.Unmarshal(body, &ipResp) == nil
-	directCountry, geoOK := observationFromIPWhois(ipResp)
 	var directGeo *geo.GeoInfo
-	if geoOK {
-		directGeo = geoInfoFromIPWhois(ipResp, directCountry)
+	directCountry := country.Observation{}
+	directSource := "none"
+	geoOK := false
+	if body, ok := ep.request(ctx, outboundTag, ipAPIGeoURL, ep.cfg.ExitProbeTimeout); ok {
+		if info, observation, valid := parseIPAPIGeo(body); valid {
+			directGeo, directCountry, directSource, geoOK = info, observation, "ip-api", true
+		}
 	}
-	directSource := "ipwho"
+	if !geoOK {
+		body, ok := ep.request(ctx, outboundTag, geoAPIURL, ep.cfg.ExitProbeTimeout)
+		var ipResp geo.IPWhoisResponse
+		if ok && json.Unmarshal(body, &ipResp) == nil {
+			if observation, valid := observationFromIPWhois(ipResp); valid {
+				directGeo, directCountry, directSource, geoOK = geoInfoFromIPWhois(ipResp, observation), observation, "ipwho", true
+			}
+		}
+	}
 	if !geoOK {
 		directCountry, directSource = probeCountry(ctx, ep.request, outboundTag, ep.cfg.ExitProbeTimeout, traceWitness)
 		geoOK = directCountry.Valid()
@@ -363,6 +373,36 @@ func parseIPSBGeo(body []byte) (*geo.GeoInfo, country.Observation, bool) {
 	}
 	observation := country.Observation{IP: ip.Unmap(), Country: code}
 	return &geo.GeoInfo{CountryCode: code, City: strings.TrimSpace(response.City), ISP: isp, IP: observation.IP.String()}, observation, true
+}
+
+func parseIPAPIGeo(body []byte) (*geo.GeoInfo, country.Observation, bool) {
+	var response struct {
+		Status      string `json:"status"`
+		Query       string `json:"query"`
+		CountryCode string `json:"countryCode"`
+		City        string `json:"city"`
+		Region      string `json:"regionName"`
+		ISP         string `json:"isp"`
+		Org         string `json:"org"`
+	}
+	if json.Unmarshal(body, &response) != nil || response.Status != "success" {
+		return nil, country.Observation{}, false
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(response.Query))
+	code := strings.ToUpper(strings.TrimSpace(response.CountryCode))
+	if err != nil || !country.IsCode(code) {
+		return nil, country.Observation{}, false
+	}
+	city := strings.TrimSpace(response.City)
+	if city == "" {
+		city = strings.TrimSpace(response.Region)
+	}
+	isp := strings.TrimSpace(response.ISP)
+	if isp == "" {
+		isp = strings.TrimSpace(response.Org)
+	}
+	observation := country.Observation{IP: ip.Unmap(), Country: code}
+	return &geo.GeoInfo{CountryCode: code, City: city, ISP: isp, IP: observation.IP.String()}, observation, true
 }
 
 func cloneGeoInfo(info *geo.GeoInfo) *geo.GeoInfo {

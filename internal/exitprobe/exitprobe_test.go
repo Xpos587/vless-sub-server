@@ -205,6 +205,13 @@ func TestParseIPSBGeoKeepsCityAndISP(t *testing.T) {
 	}
 }
 
+func TestParseIPAPIGeoKeepsSelectedBalancerExitMetadata(t *testing.T) {
+	info, observation, ok := parseIPAPIGeo([]byte(`{"status":"success","query":"198.51.100.7","countryCode":"DE","city":"Frankfurt am Main","regionName":"Hesse","isp":"Example Transit","org":"Example Org"}`))
+	if !ok || observation.Country != "DE" || info == nil || info.City != "Frankfurt am Main" || info.ISP != "Example Transit" || info.IP != "198.51.100.7" {
+		t.Fatalf("info=%#v observation=%#v ok=%t", info, observation, ok)
+	}
+}
+
 func TestProbeCountryUsesCountryIsAfterOtherWitnessesFail(t *testing.T) {
 	var targets []string
 	request := func(_ context.Context, _, target string, _ time.Duration) ([]byte, bool) {
