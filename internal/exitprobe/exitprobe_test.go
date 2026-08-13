@@ -198,6 +198,13 @@ func TestParseCountryIsUsesObservedIPAndCountry(t *testing.T) {
 	}
 }
 
+func TestParseIPSBGeoKeepsCityAndISP(t *testing.T) {
+	info, observation, ok := parseIPSBGeo([]byte(`{"ip":"198.51.100.4","country_code":"FI","city":"Helsinki","isp":"Example Transit","organization":"Example Org"}`))
+	if !ok || observation.Country != "FI" || info == nil || info.City != "Helsinki" || info.ISP != "Example Transit" || info.IP != "198.51.100.4" {
+		t.Fatalf("info=%#v observation=%#v ok=%t", info, observation, ok)
+	}
+}
+
 func TestProbeCountryUsesCountryIsAfterOtherWitnessesFail(t *testing.T) {
 	var targets []string
 	request := func(_ context.Context, _, target string, _ time.Duration) ([]byte, bool) {
@@ -295,7 +302,7 @@ func TestBuildOutboundOnlyConfigSuppressesExpectedWireguardWarnings(t *testing.T
 func TestBuildProbeResultPreservesWarpCountryForDirectBlackhole(t *testing.T) {
 	warpObservation := country.Observation{IP: netip.MustParseAddr("198.51.100.1"), Country: "FI"}
 	result := buildProbeResult(
-		geo.IPWhoisResponse{},
+		nil,
 		country.Observation{}, "none",
 		warpObservation, "cf-trace",
 		quality.Metrics{Blackhole: true},

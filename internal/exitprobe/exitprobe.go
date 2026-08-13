@@ -33,6 +33,7 @@ import (
 
 const (
 	geoAPIURL       = "https://ipwho.is/"
+	ipsbGeoAPIURL   = "https://api.ip.sb/geoip"
 	traceAPIURL     = "https://speed.cloudflare.com/cdn-cgi/trace"
 	countryIsAPIURL = "https://api.country.is/"
 	healthAPIURL    = "https://speed.cloudflare.com/__down?bytes=0"
@@ -210,10 +211,21 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	var ipResp geo.IPWhoisResponse
 	geoOK = geoOK && json.Unmarshal(body, &ipResp) == nil
 	directCountry, geoOK := observationFromIPWhois(ipResp)
+	var directGeo *geo.GeoInfo
+	if geoOK {
+		directGeo = geoInfoFromIPWhois(ipResp, directCountry)
+	}
 	directSource := "ipwho"
 	if !geoOK {
 		directCountry, directSource = probeCountry(ctx, ep.request, outboundTag, ep.cfg.ExitProbeTimeout, traceWitness)
 		geoOK = directCountry.Valid()
+	}
+	if directGeo == nil {
+		if body, ok := ep.request(ctx, outboundTag, ipsbGeoAPIURL, ep.cfg.ExitProbeTimeout); ok {
+			if info, observation, valid := parseIPSBGeo(body); valid {
+				directGeo, directCountry, directSource, geoOK = info, observation, "ip-sb", true
+			}
+		}
 	}
 	warpCountry := country.Observation{}
 	warpSource := "none"
@@ -254,7 +266,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 			directCountry, directSource, warpCountry, warpSource, metrics.InternetReachable,
 		)
 	}
-	return buildProbeResult(ipResp, directCountry, directSource, warpCountry, warpSource, metrics)
+	return buildProbeResult(directGeo, directCountry, directSource, warpCountry, warpSource, metrics)
 }
 
 func healthResponseOK(_ []byte, requestOK bool) bool { return requestOK }
@@ -286,16 +298,7 @@ func retryMissingCountries(
 	return direct, directSource, warp, warpSource
 }
 
-func buildProbeResult(ipResp geo.IPWhoisResponse, directCountry country.Observation, directSource string, warpCountry country.Observation, warpSource string, metrics quality.Metrics) *ExitProbeResult {
-	city := ipResp.City
-	if city == "" {
-		city = ipResp.Region
-	}
-	isp := ipResp.Connection.ISP
-	if isp == "" {
-		isp = ipResp.Connection.Org
-	}
-
+func buildProbeResult(directGeo *geo.GeoInfo, directCountry country.Observation, directSource string, warpCountry country.Observation, warpSource string, metrics quality.Metrics) *ExitProbeResult {
 	result := &ExitProbeResult{
 		ExitIP:        directCountry.IP.String(),
 		ExitLoc:       directCountry.Country,
@@ -306,15 +309,23 @@ func buildProbeResult(ipResp geo.IPWhoisResponse, directCountry country.Observat
 		XrayOK:        metrics.InternetReachable,
 		Metrics:       metrics,
 	}
-	if directCountry.Valid() {
-		result.GeoInfo = &geo.GeoInfo{
-			CountryCode: directCountry.Country,
-			City:        city,
-			ISP:         isp,
-			IP:          directCountry.IP.String(),
-		}
-	}
+	result.GeoInfo = cloneGeoInfo(directGeo)
 	return result
+}
+
+func geoInfoFromIPWhois(response geo.IPWhoisResponse, observation country.Observation) *geo.GeoInfo {
+	if !observation.Valid() {
+		return nil
+	}
+	city := response.City
+	if city == "" {
+		city = response.Region
+	}
+	isp := response.Connection.ISP
+	if isp == "" {
+		isp = response.Connection.Org
+	}
+	return &geo.GeoInfo{CountryCode: observation.Country, City: city, ISP: isp, IP: observation.IP.String()}
 }
 
 type countryRequester func(context.Context, string, string, time.Duration) ([]byte, bool)
@@ -329,6 +340,38 @@ var (
 	ipWhoisWitness   = countryWitness{source: "ipwho", target: geoAPIURL, parse: parseIPWhoisBody}
 	countryIsWitness = countryWitness{source: "country-is", target: countryIsAPIURL, parse: parseCountryIs}
 )
+
+func parseIPSBGeo(body []byte) (*geo.GeoInfo, country.Observation, bool) {
+	var response struct {
+		IP           string `json:"ip"`
+		CountryCode  string `json:"country_code"`
+		City         string `json:"city"`
+		ISP          string `json:"isp"`
+		Organization string `json:"organization"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return nil, country.Observation{}, false
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(response.IP))
+	code := strings.ToUpper(strings.TrimSpace(response.CountryCode))
+	if err != nil || !country.IsCode(code) {
+		return nil, country.Observation{}, false
+	}
+	isp := strings.TrimSpace(response.ISP)
+	if isp == "" {
+		isp = strings.TrimSpace(response.Organization)
+	}
+	observation := country.Observation{IP: ip.Unmap(), Country: code}
+	return &geo.GeoInfo{CountryCode: code, City: strings.TrimSpace(response.City), ISP: isp, IP: observation.IP.String()}, observation, true
+}
+
+func cloneGeoInfo(info *geo.GeoInfo) *geo.GeoInfo {
+	if info == nil {
+		return nil
+	}
+	copy := *info
+	return &copy
+}
 
 func probeCountry(ctx context.Context, request countryRequester, outboundTag string, timeout time.Duration, witnesses ...countryWitness) (country.Observation, string) {
 	for _, witness := range witnesses {
