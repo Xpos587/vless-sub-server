@@ -29,6 +29,7 @@ import (
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -73,6 +74,7 @@ type ExitProber struct {
 	mu        sync.Mutex
 	geoMu     sync.Mutex
 	geoByIP   map[netip.Addr]geoLookup
+	geoGroup  singleflight.Group
 }
 
 type geoLookup struct {
@@ -457,13 +459,28 @@ func lookupIPSBGeo(ctx context.Context, ip netip.Addr, timeout time.Duration) (*
 
 func (ep *ExitProber) lookupObservedExit(ctx context.Context, ip netip.Addr) (*geo.GeoInfo, country.Observation, bool) {
 	ep.geoMu.Lock()
-	defer ep.geoMu.Unlock()
 	if cached, found := ep.geoByIP[ip]; found {
+		ep.geoMu.Unlock()
 		return cloneGeoInfo(cached.info), cached.observation, cached.ok
 	}
-	info, observation, ok := lookupIPSBGeo(ctx, ip, ep.cfg.ExitProbeTimeout)
-	ep.geoByIP[ip] = geoLookup{info: cloneGeoInfo(info), observation: observation, ok: ok}
-	return info, observation, ok
+	ep.geoMu.Unlock()
+
+	value, _, _ := ep.geoGroup.Do(ip.String(), func() (any, error) {
+		ep.geoMu.Lock()
+		if cached, found := ep.geoByIP[ip]; found {
+			ep.geoMu.Unlock()
+			return cached, nil
+		}
+		ep.geoMu.Unlock()
+		info, observation, ok := lookupIPSBGeo(ctx, ip, ep.cfg.ExitProbeTimeout)
+		cached := geoLookup{info: cloneGeoInfo(info), observation: observation, ok: ok}
+		ep.geoMu.Lock()
+		ep.geoByIP[ip] = cached
+		ep.geoMu.Unlock()
+		return cached, nil
+	})
+	cached := value.(geoLookup)
+	return cloneGeoInfo(cached.info), cached.observation, cached.ok
 }
 
 func cloneGeoInfo(info *geo.GeoInfo) *geo.GeoInfo {
