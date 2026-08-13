@@ -48,9 +48,7 @@ func RenameAll(records []struct {
 		var baseName string
 		gatewayKey := credentialGatewayKey(r.Record)
 		credentialRouted := gatewayCounts[gatewayKey] > 1 && len(gatewayNames[gatewayKey]) > 1
-		if isAutoRoute(r.Record.Fragment) {
-			baseName = credentialRouteName(r.Record.Fragment, r.Geo)
-		} else if credentialRouted && r.Record.Fragment != "" {
+		if credentialRouted && r.Record.Fragment != "" {
 			baseName = credentialRouteName(r.Record.Fragment, r.Geo)
 		} else if r.Geo != nil {
 			baseName = buildName(r.Geo)

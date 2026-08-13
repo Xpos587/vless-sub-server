@@ -51,7 +51,7 @@ func TestRenameAllStillUsesObservedGeoForIndependentServers(t *testing.T) {
 	}
 }
 
-func TestRenameAllDoesNotInventCountryForAutoRoute(t *testing.T) {
+func TestRenameAllUsesObservedGeoForStandaloneAutoRoute(t *testing.T) {
 	records := []struct {
 		Record parse.ProxyRecord
 		Geo    *geo.GeoInfo
@@ -61,8 +61,25 @@ func TestRenameAllDoesNotInventCountryForAutoRoute(t *testing.T) {
 	}
 
 	got := RenameAll(records)
-	if got[0].RenamedFragment != "АВТОВЫБОР (VolnaApp LLP)" {
+	if got[0].RenamedFragment != "🇭🇰 Hong Kong (VolnaApp LLP)" {
 		t.Fatalf("name = %q", got[0].RenamedFragment)
+	}
+}
+
+func TestRenameAllDoesNotInventCountryForAutoRouteInSharedGateway(t *testing.T) {
+	shared := map[string]string{"type": "tcp", "security": "reality", "flow": "xtls-rprx-vision", "sni": "www.booking.com", "pbk": "shared-key", "sid": "shared-id"}
+	records := []struct {
+		Record parse.ProxyRecord
+		Geo    *geo.GeoInfo
+		IsLAN  bool
+	}{
+		{Record: parse.ProxyRecord{Protocol: parse.VLESS, Host: "170.168.90.1", Port: 2083, UUIDOrPassword: "auto", QueryParams: cloneParams(shared), Fragment: "🇪🇺 АВТОВЫБОР - VPN 10 Гбит ⚡"}, Geo: &geo.GeoInfo{CountryCode: "HK", City: "Hong Kong", ISP: "VolnaApp LLP"}},
+		{Record: parse.ProxyRecord{Protocol: parse.VLESS, Host: "170.168.90.1", Port: 2083, UUIDOrPassword: "region", QueryParams: cloneParams(shared), Fragment: "🇻🇳 Вьетнам VPN - 1 Гбит ⚡"}, Geo: &geo.GeoInfo{CountryCode: "HK", City: "Hong Kong", ISP: "VolnaApp LLP"}},
+	}
+
+	got := RenameAll(records)
+	if got[0].RenamedFragment != "АВТОВЫБОР (VolnaApp LLP)" {
+		t.Fatalf("auto name = %q", got[0].RenamedFragment)
 	}
 }
 
