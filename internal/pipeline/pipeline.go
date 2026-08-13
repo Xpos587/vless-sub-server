@@ -28,8 +28,10 @@ type CachedData struct {
 }
 
 type CachedEntry struct {
-	Entry     rename.RenamedEntry
-	Countries country.RouteCountries
+	Entry         rename.RenamedEntry
+	Countries     country.RouteCountries
+	DirectHealthy bool
+	WarpHealthy   bool
 }
 
 type outputEntry struct {
@@ -200,10 +202,19 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	}
 	meta := format.FormatMetadata{TotalFetched: len(lines), TotalParsed: len(filtered), TotalSkipped: parsed.Skipped, TotalDuplicates: parsed.Duplicates, TotalAlive: len(renamed), TotalDead: result.Dead, SourcesOK: sourcesOK, SourcesFailed: len(fetched) - sourcesOK, GeoAvailable: geoAvailable, GeoTotal: len(probed)}
 	cachedEntries := make([]CachedEntry, len(renamed))
+	directEntries := make([]rename.RenamedEntry, 0, len(renamed))
+	warpEntries := make([]rename.RenamedEntry, 0, len(renamed))
 	for i, entry := range renamed {
-		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), Countries: entries[i].Countries}
+		runtime, _ := p.runtime.Get(identity(entries[i].Record))
+		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), Countries: entries[i].Countries, DirectHealthy: runtime.DirectHealthy, WarpHealthy: runtime.WarpHealthy}
+		if runtime.DirectHealthy {
+			directEntries = append(directEntries, entry)
+		}
+		if runtime.WarpHealthy {
+			warpEntries = append(warpEntries, entry)
+		}
 	}
-	p.cache.Store(&CachedData{Entries: cachedEntries, Metadata: meta, Output: format.FormatOutput(renamed, meta), JSONOutput: format.FormatXrayJSON(renamed, meta), LastRefresh: now})
+	p.cache.Store(&CachedData{Entries: cachedEntries, Metadata: meta, Output: format.FormatOutput(directEntries, meta), JSONOutput: format.FormatXrayJSON(warpEntries, meta), LastRefresh: now})
 	if p.countryState != nil {
 		if err := p.countryState.Save(); err != nil {
 			result.CountryStateSaveFailed = true
@@ -225,10 +236,12 @@ func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, n
 	if probe != nil {
 		metrics = probe.Metrics
 	}
+	directHealthy := metrics.InternetReachable
+	warpHealthy := probe != nil && probe.WarpCountry.Valid()
 	observation := quality.Blackhole
 	if metrics.SuccessCount*5 >= metrics.SampleCount*4 && metrics.SampleCount > 0 {
 		observation = quality.Good
-	} else if metrics.InternetReachable {
+	} else if directHealthy || warpHealthy {
 		observation = quality.Partial
 	}
 	state := previous.StateData
@@ -237,8 +250,9 @@ func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, n
 	}
 	state = quality.Transition(state, observation, now, quality.DefaultStateConfig())
 	runtime := previous
-	runtime.Key, runtime.State, runtime.StateData, runtime.Reachable = key, state.State, state, metrics.InternetReachable
-	if metrics.InternetReachable {
+	runtime.Key, runtime.State, runtime.StateData = key, state.State, state
+	runtime.DirectHealthy, runtime.WarpHealthy, runtime.Reachable = directHealthy, warpHealthy, directHealthy || warpHealthy
+	if directHealthy {
 		if previous.Metrics.BandwidthMeasured {
 			metrics.DownloadMbps = previous.Metrics.DownloadMbps
 			metrics.BandwidthMeasured = true
@@ -335,7 +349,7 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 
 func hasReachabilityWitness(probes map[int]*exitprobe.ExitProbeResult) bool {
 	for _, probe := range probes {
-		if probe != nil && probe.Metrics.InternetReachable {
+		if probe != nil && (probe.Metrics.InternetReachable || probe.WarpCountry.Valid()) {
 			return true
 		}
 	}

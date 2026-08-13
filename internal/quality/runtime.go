@@ -37,6 +37,8 @@ type Runtime struct {
 	Key                    string
 	State                  State
 	Reachable              bool
+	DirectHealthy          bool
+	WarpHealthy            bool
 	Labels                 map[string]string
 	Metrics                Metrics
 	RawScore               float64

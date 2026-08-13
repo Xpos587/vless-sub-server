@@ -90,7 +90,7 @@ func TestRenderFiltersExactDirectOrWarpCountryAndPreservesOrder(t *testing.T) {
 
 func TestRenderCountryFilteredViewFailsClosedButUnfilteredIncludesUnknown(t *testing.T) {
 	data := sampleCache()
-	data.Entries = append(data.Entries, pipeline.CachedEntry{Entry: renamed("Unknown", "unknown.example")})
+	data.Entries = append(data.Entries, pipeline.CachedEntry{Entry: renamed("Unknown", "unknown.example"), WarpHealthy: true})
 
 	unfiltered := Render(data, Options{Format: FormatJSON, Warp: true})
 	filtered := Render(data, Options{Format: FormatJSON, Warp: true, Exclude: map[string]struct{}{"RU": {}}})
@@ -129,18 +129,45 @@ func TestRenderUsesPrecomputedDefaultBodies(t *testing.T) {
 	}
 }
 
+func TestRenderSelectsEntriesHealthyForRequestedRoute(t *testing.T) {
+	data := sampleCache()
+	data.Entries[0].DirectHealthy = false
+	data.Entries[0].WarpHealthy = true
+	data.Entries[1].DirectHealthy = true
+	data.Entries[1].WarpHealthy = false
+	data.Output = ""
+	data.JSONOutput = nil
+
+	direct := Render(data, Options{Format: FormatURL, Warp: false})
+	warp := Render(data, Options{Format: FormatJSON, Warp: true})
+	if direct.EntryCount != 1 || !contains(string(direct.Body), "Second") || contains(string(direct.Body), "First") {
+		t.Fatalf("direct response = %#v body=%s", direct, direct.Body)
+	}
+	var configs []map[string]any
+	if err := json.Unmarshal(warp.Body, &configs); err != nil {
+		t.Fatal(err)
+	}
+	if warp.EntryCount != 1 || len(configs) != 1 || configs[0]["remarks"] != "First" {
+		t.Fatalf("WARP response = %#v configs=%#v", warp, configs)
+	}
+}
+
 func sampleCache() *pipeline.CachedData {
 	return &pipeline.CachedData{
 		Entries: []pipeline.CachedEntry{
 			{
-				Entry: renamed("First", "first.example"),
+				Entry:         renamed("First", "first.example"),
+				DirectHealthy: true,
+				WarpHealthy:   true,
 				Countries: country.RouteCountries{
 					DirectV4: country.FamilyResult{Available: true, Country: "AE", Status: country.Confirmed},
 					WarpV4:   country.FamilyResult{Available: true, Country: "FI", Status: country.Confirmed},
 				},
 			},
 			{
-				Entry: renamed("Second", "second.example"),
+				Entry:         renamed("Second", "second.example"),
+				DirectHealthy: true,
+				WarpHealthy:   true,
 				Countries: country.RouteCountries{
 					DirectV4: country.FamilyResult{Available: true, Country: "DE", Status: country.Confirmed},
 					WarpV4:   country.FamilyResult{Available: true, Country: "DE", Status: country.Confirmed},

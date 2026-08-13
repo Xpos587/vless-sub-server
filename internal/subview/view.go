@@ -75,6 +75,9 @@ func Render(data *pipeline.CachedData, options Options) Response {
 	entries := make([]rename.RenamedEntry, 0, len(data.Entries))
 	response := Response{}
 	for _, cached := range data.Entries {
+		if options.Warp && !cached.WarpHealthy || !options.Warp && !cached.DirectHealthy {
+			continue
+		}
 		decision := country.Filter(cached.Countries, options.Warp, options.Exclude)
 		response.Unknown += decision.Unknown
 		response.Conflict += decision.Conflict
