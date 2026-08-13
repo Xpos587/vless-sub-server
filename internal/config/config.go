@@ -29,6 +29,7 @@ type Config struct {
 	SourceStaleMaxAge      time.Duration `env:"SOURCE_STALE_MAX_AGE" envDefault:"6h"`
 	CountryStatePath       string        `env:"COUNTRY_STATE_PATH"`
 	CountryReprobeInterval time.Duration `env:"COUNTRY_REPROBE_INTERVAL" envDefault:"5m"`
+	ExitObserverURL        string        `env:"EXIT_OBSERVER_URL" envDefault:"https://sub.hypcat.net/_exit"`
 	MaxConcurrent          int           `env:"MAX_CONCURRENT" envDefault:"50"`
 	GeoDatDir              string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
 	Hwid                   string        `env:"HWID,required"`
@@ -52,6 +53,7 @@ func Load() (*Config, error) {
 		BandwidthRetryAfter:    30 * time.Minute,
 		SourceStaleMaxAge:      6 * time.Hour,
 		CountryReprobeInterval: 5 * time.Minute,
+		ExitObserverURL:        "https://sub.hypcat.net/_exit",
 		MaxConcurrent:          50,
 		GeoDatDir:              "/usr/local/share/xray",
 	}
@@ -108,6 +110,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("COUNTRY_REPROBE_INTERVAL must be positive")
 	}
 	c.CountryStatePath = os.Getenv("COUNTRY_STATE_PATH")
+	if value := os.Getenv("EXIT_OBSERVER_URL"); value != "" {
+		c.ExitObserverURL = value
+	}
 	if c.BandwidthBytes, err = int64Env("BANDWIDTH_BYTES", c.BandwidthBytes); err != nil || c.BandwidthBytes < 64<<10 || c.BandwidthBytes > 8<<20 {
 		return nil, fmt.Errorf("BANDWIDTH_BYTES must be between 64KiB and 8MiB")
 	}

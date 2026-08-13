@@ -71,12 +71,21 @@ type ExitProber struct {
 	warpTags  []string
 	transport *http.Transport
 	mu        sync.Mutex
+	geoMu     sync.Mutex
+	geoByIP   map[netip.Addr]geoLookup
+}
+
+type geoLookup struct {
+	info        *geo.GeoInfo
+	observation country.Observation
+	ok          bool
 }
 
 func NewExitProber(cfg *config.Config) *ExitProber {
 	return &ExitProber{
 		cfg:       cfg,
 		proxyTags: nil,
+		geoByIP:   make(map[netip.Addr]geoLookup),
 		transport: &http.Transport{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   20,
@@ -212,9 +221,18 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	directCountry := country.Observation{}
 	directSource := "none"
 	geoOK := false
-	if body, ok := ep.request(ctx, outboundTag, ipAPIGeoURL, ep.cfg.ExitProbeTimeout); ok {
-		if info, observation, valid := parseIPAPIGeo(body); valid {
-			directGeo, directCountry, directSource, geoOK = info, observation, "ip-api", true
+	if body, ok := ep.request(ctx, outboundTag, ep.cfg.ExitObserverURL, ep.cfg.ExitProbeTimeout); ok {
+		if exitIP, valid := parseExitObservationIP(body); valid {
+			if info, observation, found := ep.lookupObservedExit(ctx, exitIP); found {
+				directGeo, directCountry, directSource, geoOK = info, observation, "observer+ip-sb", true
+			}
+		}
+	}
+	if !geoOK {
+		if body, ok := ep.request(ctx, outboundTag, ipAPIGeoURL, ep.cfg.ExitProbeTimeout); ok {
+			if info, observation, valid := parseIPAPIGeo(body); valid {
+				directGeo, directCountry, directSource, geoOK = info, observation, "ip-api", true
+			}
 		}
 	}
 	if !geoOK {
@@ -403,6 +421,49 @@ func parseIPAPIGeo(body []byte) (*geo.GeoInfo, country.Observation, bool) {
 	}
 	observation := country.Observation{IP: ip.Unmap(), Country: code}
 	return &geo.GeoInfo{CountryCode: code, City: city, ISP: isp, IP: observation.IP.String()}, observation, true
+}
+
+func parseExitObservationIP(body []byte) (netip.Addr, bool) {
+	var response struct {
+		IP string `json:"ip"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return netip.Addr{}, false
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(response.IP))
+	return ip.Unmap(), err == nil
+}
+
+func lookupIPSBGeo(ctx context.Context, ip netip.Addr, timeout time.Duration) (*geo.GeoInfo, country.Observation, bool) {
+	client := &http.Client{Timeout: timeout}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ipsbGeoAPIURL+"/"+ip.String(), nil)
+	if err != nil {
+		return nil, country.Observation{}, false
+	}
+	response, err := client.Do(request)
+	if err != nil || response.StatusCode != http.StatusOK {
+		if response != nil {
+			response.Body.Close()
+		}
+		return nil, country.Observation{}, false
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return nil, country.Observation{}, false
+	}
+	return parseIPSBGeo(body)
+}
+
+func (ep *ExitProber) lookupObservedExit(ctx context.Context, ip netip.Addr) (*geo.GeoInfo, country.Observation, bool) {
+	ep.geoMu.Lock()
+	defer ep.geoMu.Unlock()
+	if cached, found := ep.geoByIP[ip]; found {
+		return cloneGeoInfo(cached.info), cached.observation, cached.ok
+	}
+	info, observation, ok := lookupIPSBGeo(ctx, ip, ep.cfg.ExitProbeTimeout)
+	ep.geoByIP[ip] = geoLookup{info: cloneGeoInfo(info), observation: observation, ok: ok}
+	return info, observation, ok
 }
 
 func cloneGeoInfo(info *geo.GeoInfo) *geo.GeoInfo {

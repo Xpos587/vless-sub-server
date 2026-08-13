@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -66,6 +68,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleSub)
 	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/_exit", handleExitObservation)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
@@ -192,4 +195,27 @@ func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pip
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte("ok"))
+}
+
+// handleExitObservation reports the proxy's source address observed at our
+// public edge. The endpoint is used only by the in-process probe.
+func handleExitObservation(w http.ResponseWriter, r *http.Request) {
+	if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))); err == nil && ip.IsValid() {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{"ip": ip.Unmap().String()})
+		return
+	}
+	forwarded := r.Header.Values("X-Forwarded-For")
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		parts := strings.Split(forwarded[i], ",")
+		for j := len(parts) - 1; j >= 0; j-- {
+			ip, err := netip.ParseAddr(strings.TrimSpace(parts[j]))
+			if err == nil && ip.IsValid() {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				json.NewEncoder(w).Encode(map[string]string{"ip": ip.Unmap().String()})
+				return
+			}
+		}
+	}
+	w.WriteHeader(http.StatusBadRequest)
 }

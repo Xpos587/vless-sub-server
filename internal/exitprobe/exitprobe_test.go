@@ -212,6 +212,13 @@ func TestParseIPAPIGeoKeepsSelectedBalancerExitMetadata(t *testing.T) {
 	}
 }
 
+func TestParseExitObservationIP(t *testing.T) {
+	ip, ok := parseExitObservationIP([]byte(`{"ip":"198.51.100.7"}`))
+	if !ok || ip != netip.MustParseAddr("198.51.100.7") {
+		t.Fatalf("ip=%v ok=%t", ip, ok)
+	}
+}
+
 func TestProbeCountryUsesCountryIsAfterOtherWitnessesFail(t *testing.T) {
 	var targets []string
 	request := func(_ context.Context, _, target string, _ time.Duration) ([]byte, bool) {
