@@ -11,6 +11,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/dns"
+	"github.com/michael/vless-sub-server/internal/endpointgeo"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/fetch"
 	"github.com/michael/vless-sub-server/internal/format"
@@ -67,7 +68,10 @@ type Pipeline struct {
 	refreshMu    sync.Mutex   // Refresh and country-only reprobes share mutable runtime state.
 }
 
-const bandwidthStageTimeout = 30 * time.Second
+const (
+	bandwidthStageTimeout    = 30 * time.Second
+	endpointGeoLookupTimeout = 8 * time.Second
+)
 
 func New(cfg *config.Config, dnsCache *dns.DNSCache) *Pipeline {
 	state, _ := country.OpenStateStore("")
@@ -123,6 +127,7 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	result.Parsed = len(filtered)
 
 	dnsMap := dns.ResolveHosts(ctx, dedupHosts(filtered), 20, p.cfg.DNSTimeout, p.dnsCache)
+	p.attachEndpointGeo(ctx, dnsMap)
 	probed := make([]parse.ProxyRecord, 0, len(filtered))
 	for _, record := range filtered {
 		if resolved := dnsMap[record.Host]; resolved != nil && resolved.IP != "" {
@@ -421,6 +426,9 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			result.Partial++
 		}
 		info := runtime.GeoInfo
+		if info == nil {
+			info = dnsMap[record.Host].EndpointGeo
+		}
 		if info != nil {
 			geoAvailable++
 		}
@@ -461,6 +469,28 @@ func dedupHosts(records []parse.ProxyRecord) []string {
 		}
 	}
 	return hosts
+}
+
+func (p *Pipeline) attachEndpointGeo(ctx context.Context, dnsMap map[string]*dns.DNSResult) {
+	ips := make([]string, 0, len(dnsMap))
+	seen := make(map[string]struct{}, len(dnsMap))
+	for _, resolved := range dnsMap {
+		if resolved == nil || resolved.IP == "" || resolved.IsPrivate {
+			continue
+		}
+		if _, exists := seen[resolved.IP]; !exists {
+			seen[resolved.IP] = struct{}{}
+			ips = append(ips, resolved.IP)
+		}
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, endpointGeoLookupTimeout)
+	defer cancel()
+	byIP := endpointgeo.LookupAll(lookupCtx, ips, 20, endpointGeoLookupTimeout)
+	for _, resolved := range dnsMap {
+		if resolved != nil {
+			resolved.EndpointGeo = cloneGeo(byIP[resolved.IP])
+		}
+	}
 }
 func cloneGeo(info *geo.GeoInfo) *geo.GeoInfo {
 	if info == nil {

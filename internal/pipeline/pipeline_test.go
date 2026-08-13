@@ -11,6 +11,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/format"
+	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/quality"
 	"github.com/michael/vless-sub-server/internal/rename"
@@ -97,6 +98,19 @@ func TestOutputEntriesExcludeDeadAndOrderByStateThenScore(t *testing.T) {
 	}
 	if result.Dead != 1 {
 		t.Fatalf("dead = %d, want 1", result.Dead)
+	}
+}
+
+func TestOutputEntriesUsesEndpointGeoWhenDirectExitIsUnavailable(t *testing.T) {
+	p := &Pipeline{runtime: quality.NewStore()}
+	record := parse.ProxyRecord{Protocol: parse.VLESS, Host: "balancer.example", Port: 443, UUIDOrPassword: "one"}
+	p.runtime.Set(quality.Runtime{Key: identity(record), State: quality.Degraded})
+
+	entries, _ := p.outputEntries([]parse.ProxyRecord{record}, nil, map[string]*dns.DNSResult{
+		"balancer.example": {IP: "198.51.100.1", EndpointGeo: &geo.GeoInfo{CountryCode: "PL", City: "Warsaw", ISP: "Example Networks", IP: "198.51.100.1"}},
+	}, &RefreshResult{})
+	if len(entries) != 1 || entries[0].Geo == nil || entries[0].Geo.City != "Warsaw" {
+		t.Fatalf("endpoint geo was not used: %#v", entries)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/michael/vless-sub-server/internal/geo"
+
 	"golang.org/x/sync/errgroup"
 )
 
@@ -13,6 +15,9 @@ type DNSResult struct {
 	Host      string
 	IP        string
 	IsPrivate bool
+	// EndpointGeo describes the configured proxy endpoint, not its egress.
+	// It is only a naming fallback when direct egress cannot be observed.
+	EndpointGeo *geo.GeoInfo
 }
 
 type cacheEntry struct {
