@@ -34,6 +34,23 @@ func TestExtractSingboxURLsTransportKey(t *testing.T) {
 	}
 }
 
+func TestExtractXrayVLESSPreservesUserFlow(t *testing.T) {
+	input := `[{
+		"outbounds":[{"protocol":"vless","tag":"vision","settings":{"vnext":[{"address":"example.com","port":443,"users":[{"id":"uuid","encryption":"none","flow":"xtls-rprx-vision"}]}]},
+		"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"serverName":"sni.example.com","fingerprint":"chrome","publicKey":"pubkey","shortId":"short"}}}]}]`
+	urls := extractSingboxURLs(json.RawMessage(input))
+	if len(urls) != 1 {
+		t.Fatalf("urls = %#v", urls)
+	}
+	parsed, err := url.Parse(urls[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("flow"); got != "xtls-rprx-vision" {
+		t.Fatalf("flow = %q, want xtls-rprx-vision", got)
+	}
+}
+
 func TestExtractSingboxURLsNullServer(t *testing.T) {
 	// Malformed entry with null server should not panic
 	input := `[{"outbounds":[{"protocol":"trojan","tag":"test","settings":{"servers":[null]}}],"remarks":"test"}]`

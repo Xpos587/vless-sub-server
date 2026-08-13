@@ -31,6 +31,59 @@ func TestParseDefaultsPreserveExistingFormats(t *testing.T) {
 	}
 }
 
+func TestParseForClientKeepsRootURLDirectForEveryClient(t *testing.T) {
+	for _, client := range []Client{ClientUnknown, ClientV2rayNG, ClientINCY, ClientExclave, ClientHusi} {
+		options, err := ParseForClient(url.Values{}, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.Format != FormatURL || options.Warp {
+			t.Fatalf("%s options = %#v", client, options)
+		}
+	}
+}
+
+func TestParseForClientDisablesWarpForFlatteningClients(t *testing.T) {
+	for _, client := range []Client{ClientExclave, ClientHusi} {
+		options, err := ParseForClient(url.Values{"format": {"json"}}, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.Format != FormatJSON || options.Warp {
+			t.Fatalf("%s options = %#v", client, options)
+		}
+	}
+}
+
+func TestParseForClientRejectsExplicitWarpForFlatteningClients(t *testing.T) {
+	for _, client := range []Client{ClientExclave, ClientHusi} {
+		_, err := ParseForClient(url.Values{"format": {"json"}, "warp": {"on"}}, client)
+		if err == nil {
+			t.Fatalf("%s accepted an unsupported WARP chain", client)
+		}
+	}
+}
+
+func TestDetectClientUsesStableAndroidUserAgents(t *testing.T) {
+	for name, test := range map[string]struct {
+		userAgent string
+		xClient   string
+		want      Client
+	}{
+		"v2rayNG": {userAgent: "v2rayNG/2.2.6", want: ClientV2rayNG},
+		"INCY":    {userAgent: "INCY/3.0/Android", xClient: "INCY", want: ClientINCY},
+		"Exclave": {userAgent: "Exclave/0.17.46", want: ClientExclave},
+		"Husi":    {userAgent: "husi/1.4.3 (143; sing-box 1.12.0)", want: ClientHusi},
+		"unknown": {userAgent: "curl/8.17.0", want: ClientUnknown},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := DetectClient(test.userAgent, test.xClient); got != test.want {
+				t.Fatalf("DetectClient() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestParseRejectsWarpForURLFormat(t *testing.T) {
 	_, err := Parse(url.Values{"warp": {"on"}})
 	if err == nil {
@@ -129,7 +182,7 @@ func TestRenderUsesPrecomputedDefaultBodies(t *testing.T) {
 	}
 }
 
-func TestRenderKeepsWarpVerifiedEntriesInDirectSubscription(t *testing.T) {
+func TestRenderExcludesWarpOnlyEntriesFromDirectSubscription(t *testing.T) {
 	data := sampleCache()
 	data.Entries[0].DirectHealthy = false
 	data.Entries[0].WarpHealthy = true
@@ -140,7 +193,7 @@ func TestRenderKeepsWarpVerifiedEntriesInDirectSubscription(t *testing.T) {
 
 	direct := Render(data, Options{Format: FormatURL, Warp: false})
 	warp := Render(data, Options{Format: FormatJSON, Warp: true})
-	if direct.EntryCount != 2 || !contains(string(direct.Body), "Second") || !contains(string(direct.Body), "First") {
+	if direct.EntryCount != 1 || !contains(string(direct.Body), "Second") || contains(string(direct.Body), "First") {
 		t.Fatalf("direct response = %#v body=%s", direct, direct.Body)
 	}
 	var configs []map[string]any

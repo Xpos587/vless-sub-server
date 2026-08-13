@@ -169,7 +169,8 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pipeline.CachedData) {
-	options, err := subview.Parse(r.URL.Query())
+	client := subview.DetectClient(r.Header.Get("User-Agent"), r.Header.Get("X-Client"))
+	options, err := subview.ParseForClient(r.URL.Query(), client)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)

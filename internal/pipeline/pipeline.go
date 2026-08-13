@@ -223,7 +223,7 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	for i, entry := range renamed {
 		runtime, _ := p.runtime.Get(identity(entries[i].Record))
 		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), Countries: entries[i].Countries, DirectHealthy: runtime.DirectHealthy, WarpHealthy: runtime.WarpHealthy}
-		if runtime.DirectHealthy || runtime.WarpHealthy {
+		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entry)
 		}
 		if runtime.WarpHealthy {
@@ -311,7 +311,7 @@ func (p *Pipeline) rebuildCachedCountries(cached *CachedData) {
 		entries[index].Countries = runtime.Countries
 		entries[index].DirectHealthy = runtime.DirectHealthy
 		entries[index].WarpHealthy = runtime.WarpHealthy
-		if runtime.DirectHealthy || runtime.WarpHealthy {
+		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entries[index].Entry)
 		}
 		if runtime.WarpHealthy {

@@ -216,6 +216,9 @@ func singboxOutboundToUrl(proto string, settings, stream map[string]any, remark 
 		if len(users) > 0 {
 			u, ok := users[0].(map[string]any)
 			if ok {
+				if userFlow, ok := u["flow"].(string); ok && userFlow != "" {
+					params.Set("flow", userFlow)
+				}
 				if enc, ok := u["encryption"].(string); ok && enc != "" && enc != "none" {
 					params.Set("encryption", enc)
 				}

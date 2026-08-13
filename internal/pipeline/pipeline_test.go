@@ -153,7 +153,7 @@ func TestSelectWarpReprobeCandidatesSkipsConfirmedWarpRoutes(t *testing.T) {
 	}
 }
 
-func TestRebuildCachedCountriesIncludesWarpVerifiedDirectEntries(t *testing.T) {
+func TestRebuildCachedCountriesExcludesWarpOnlyDirectEntries(t *testing.T) {
 	record := parse.ProxyRecord{Protocol: parse.VLESS, Host: "warp-verified.example", Port: 443, UUIDOrPassword: "one", QueryParams: map[string]string{"type": "tcp"}}
 	p := &Pipeline{runtime: quality.NewStore()}
 	p.runtime.Set(quality.Runtime{Key: identity(record), DirectHealthy: false, WarpHealthy: true})
@@ -162,7 +162,7 @@ func TestRebuildCachedCountriesIncludesWarpVerifiedDirectEntries(t *testing.T) {
 		Metadata: format.FormatMetadata{TotalAlive: 1},
 	})
 	cached, ok := p.Cached()
-	if !ok || !strings.Contains(cached.Output, "vless://") || !strings.Contains(cached.Output, "# Количество: 1") {
+	if !ok || strings.Contains(cached.Output, "vless://") || !strings.Contains(cached.Output, "# Количество: 0") {
 		t.Fatalf("direct output = %#v", cached)
 	}
 }
