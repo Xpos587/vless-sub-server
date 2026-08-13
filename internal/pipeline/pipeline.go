@@ -218,14 +218,16 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	for i, entry := range renamed {
 		runtime, _ := p.runtime.Get(identity(entries[i].Record))
 		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), Countries: entries[i].Countries, DirectHealthy: runtime.DirectHealthy, WarpHealthy: runtime.WarpHealthy}
-		if runtime.DirectHealthy {
+		if runtime.DirectHealthy || runtime.WarpHealthy {
 			directEntries = append(directEntries, entry)
 		}
 		if runtime.WarpHealthy {
 			warpEntries = append(warpEntries, entry)
 		}
 	}
-	p.cache.Store(&CachedData{Entries: cachedEntries, Metadata: meta, Output: format.FormatOutput(directEntries, meta), JSONOutput: format.FormatXrayJSON(warpEntries, meta), LastRefresh: now})
+	directMeta, warpMeta := meta, meta
+	directMeta.TotalAlive, warpMeta.TotalAlive = len(directEntries), len(warpEntries)
+	p.cache.Store(&CachedData{Entries: cachedEntries, Metadata: meta, Output: format.FormatOutput(directEntries, directMeta), JSONOutput: format.FormatXrayJSON(warpEntries, warpMeta), LastRefresh: now})
 	if p.countryState != nil {
 		if err := p.countryState.Save(); err != nil {
 			result.CountryStateSaveFailed = true
@@ -304,14 +306,16 @@ func (p *Pipeline) rebuildCachedCountries(cached *CachedData) {
 		entries[index].Countries = runtime.Countries
 		entries[index].DirectHealthy = runtime.DirectHealthy
 		entries[index].WarpHealthy = runtime.WarpHealthy
-		if runtime.DirectHealthy {
+		if runtime.DirectHealthy || runtime.WarpHealthy {
 			directEntries = append(directEntries, entries[index].Entry)
 		}
 		if runtime.WarpHealthy {
 			warpEntries = append(warpEntries, entries[index].Entry)
 		}
 	}
-	p.cache.Store(&CachedData{Entries: entries, Metadata: cached.Metadata, Output: format.FormatOutput(directEntries, cached.Metadata), JSONOutput: format.FormatXrayJSON(warpEntries, cached.Metadata), LastRefresh: cached.LastRefresh})
+	directMeta, warpMeta := cached.Metadata, cached.Metadata
+	directMeta.TotalAlive, warpMeta.TotalAlive = len(directEntries), len(warpEntries)
+	p.cache.Store(&CachedData{Entries: entries, Metadata: cached.Metadata, Output: format.FormatOutput(directEntries, directMeta), JSONOutput: format.FormatXrayJSON(warpEntries, warpMeta), LastRefresh: cached.LastRefresh})
 }
 
 func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, now time.Time) {

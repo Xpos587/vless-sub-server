@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
+	"github.com/michael/vless-sub-server/internal/format"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/quality"
 	"github.com/michael/vless-sub-server/internal/rename"
@@ -134,5 +136,19 @@ func TestSelectWarpReprobeCandidatesSkipsConfirmedWarpRoutes(t *testing.T) {
 	got := selectWarpReprobeCandidates(entries)
 	if len(got) != 1 || got[0].Host != "missing" {
 		t.Fatalf("candidates = %#v", got)
+	}
+}
+
+func TestRebuildCachedCountriesIncludesWarpVerifiedDirectEntries(t *testing.T) {
+	record := parse.ProxyRecord{Protocol: parse.VLESS, Host: "warp-verified.example", Port: 443, UUIDOrPassword: "one", QueryParams: map[string]string{"type": "tcp"}}
+	p := &Pipeline{runtime: quality.NewStore()}
+	p.runtime.Set(quality.Runtime{Key: identity(record), DirectHealthy: false, WarpHealthy: true})
+	p.rebuildCachedCountries(&CachedData{
+		Entries:  []CachedEntry{{Entry: rename.RenamedEntry{Record: record, RenamedFragment: "Warp Verified"}}},
+		Metadata: format.FormatMetadata{TotalAlive: 1},
+	})
+	cached, ok := p.Cached()
+	if !ok || !strings.Contains(cached.Output, "vless://") || !strings.Contains(cached.Output, "# Количество: 1") {
+		t.Fatalf("direct output = %#v", cached)
 	}
 }

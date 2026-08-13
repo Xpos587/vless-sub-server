@@ -129,7 +129,7 @@ func TestRenderUsesPrecomputedDefaultBodies(t *testing.T) {
 	}
 }
 
-func TestRenderSelectsEntriesHealthyForRequestedRoute(t *testing.T) {
+func TestRenderKeepsWarpVerifiedEntriesInDirectSubscription(t *testing.T) {
 	data := sampleCache()
 	data.Entries[0].DirectHealthy = false
 	data.Entries[0].WarpHealthy = true
@@ -140,7 +140,7 @@ func TestRenderSelectsEntriesHealthyForRequestedRoute(t *testing.T) {
 
 	direct := Render(data, Options{Format: FormatURL, Warp: false})
 	warp := Render(data, Options{Format: FormatJSON, Warp: true})
-	if direct.EntryCount != 1 || !contains(string(direct.Body), "Second") || contains(string(direct.Body), "First") {
+	if direct.EntryCount != 2 || !contains(string(direct.Body), "Second") || !contains(string(direct.Body), "First") {
 		t.Fatalf("direct response = %#v body=%s", direct, direct.Body)
 	}
 	var configs []map[string]any
