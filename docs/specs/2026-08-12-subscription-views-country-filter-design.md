@@ -111,7 +111,7 @@ Initial witnesses are ordered by route type:
    then Cloudflare `cdn-cgi/trace` as the country fallback.
 2. WARP routes use Cloudflare trace first because Cloudflare is authoritative
    for the source address and `loc` perceived at its own WARP edge, then
-   `ipwho.is` as an independent fallback.
+   `ipwho.is`, then `api.country.is`, as independent fallbacks.
 
 Only the trace `ip` and `loc` fields are parsed. `colo` is deliberately not
 treated as egress country. After the health samples warm a reachable route, one
@@ -162,6 +162,11 @@ Transition rules:
 Runtime country history remains in memory across refreshes and is keyed by the
 same credential-sensitive proxy identity used by quality scoring.
 
+When `COUNTRY_STATE_PATH` is configured, route-country evidence also survives a
+process restart. The file is atomically replaced with mode `0600` and contains
+only opaque identity hashes and the route-country state; proxy endpoints,
+credentials, and subscription URLs are not persisted.
+
 ## 6. Exact WARP-chain probing
 
 The probe xray instance gets two tags per proxy:
@@ -184,6 +189,17 @@ The WARP country stage shares the existing global proxy concurrency limit and
 request timeout. It does not create an unbounded goroutine or response cache.
 Only one primary WARP geo request is made per active proxy per refresh; the
 fallback witness is used only after primary failure.
+
+### Adaptive WARP-only reprobe
+
+`COUNTRY_REPROBE_INTERVAL` schedules a separate retry for published,
+WARP-healthy profiles whose WARP route evidence is unavailable or conflicting.
+It starts Xray only for those profiles and makes the exact `warp_N_out`
+country request using the normal witness order. It does not fetch sources,
+resolve DNS, run direct-health samples, or consume the bandwidth budget. A
+successful state change atomically rebuilds the cached country snapshot while
+preserving the original refresh timestamp; refresh and reprobe are serialized to
+keep runtime and publication state coherent.
 
 ## 7. Typed immutable publication snapshot
 

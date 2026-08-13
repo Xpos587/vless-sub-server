@@ -51,6 +51,13 @@ type ExitProbeResult struct {
 	Metrics       quality.Metrics
 }
 
+// WarpCountryResult is the observed final egress country of a proxy routed
+// through its paired WARP outbound.
+type WarpCountryResult struct {
+	Country country.Observation
+	Source  string
+}
+
 func aggregateHealthSamples(samples []time.Duration, requested int, geoOK bool) quality.Metrics {
 	return quality.Aggregate(samples, requested-len(samples), requested, geoOK)
 }
@@ -151,6 +158,38 @@ func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord)
 	}
 	g.Wait()
 
+	return results
+}
+
+// ProbeWarpCountries measures only the final WARP egress. It deliberately
+// skips direct health samples, geolocation, and bandwidth work.
+func (ep *ExitProber) ProbeWarpCountries(ctx context.Context, records []parse.ProxyRecord) map[int]WarpCountryResult {
+	results := make(map[int]WarpCountryResult, len(records))
+	maxConcurrent := ep.cfg.MaxConcurrent
+	if len(records) < maxConcurrent {
+		maxConcurrent = len(records)
+	}
+	if maxConcurrent == 0 {
+		return results
+	}
+
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrent)
+	for index := range records {
+		index := index
+		g.Go(func() error {
+			if index >= len(ep.warpTags) {
+				return nil
+			}
+			observation, source := probeCountry(ctx, ep.request, ep.warpTags[index], ep.cfg.ExitProbeTimeout, traceWitness, ipWhoisWitness, countryIsWitness)
+			mu.Lock()
+			results[index] = WarpCountryResult{Country: observation, Source: source}
+			mu.Unlock()
+			return nil
+		})
+	}
+	g.Wait()
 	return results
 }
 

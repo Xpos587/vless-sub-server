@@ -124,3 +124,15 @@ func TestCachedReturnsDeepCopiedTypedSnapshot(t *testing.T) {
 		t.Fatalf("cache was mutated through copy: %#v", second)
 	}
 }
+
+func TestSelectWarpReprobeCandidatesSkipsConfirmedWarpRoutes(t *testing.T) {
+	entries := []CachedEntry{
+		{Entry: rename.RenamedEntry{Record: parse.ProxyRecord{Host: "confirmed"}}, WarpHealthy: true, Countries: country.RouteCountries{WarpV4: country.FamilyResult{Available: true, Country: "FI", Status: country.Confirmed}}},
+		{Entry: rename.RenamedEntry{Record: parse.ProxyRecord{Host: "missing"}}, WarpHealthy: true},
+		{Entry: rename.RenamedEntry{Record: parse.ProxyRecord{Host: "not-warp"}}, WarpHealthy: false},
+	}
+	got := selectWarpReprobeCandidates(entries)
+	if len(got) != 1 || got[0].Host != "missing" {
+		t.Fatalf("candidates = %#v", got)
+	}
+}

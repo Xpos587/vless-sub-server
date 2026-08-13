@@ -22,9 +22,10 @@ import (
 const initWaitTimeout = 5 * time.Second
 
 var (
-	refreshing atomic.Int32 // 0=idle, 1=refreshing
-	cfg        *config.Config
-	service    *pipeline.Pipeline
+	refreshing       atomic.Int32 // 0=idle, 1=refreshing
+	countryReprobing atomic.Int32 // 0=idle, 1=reprobing final WARP countries
+	cfg              *config.Config
+	service          *pipeline.Pipeline
 )
 
 func main() {
@@ -53,6 +54,12 @@ func main() {
 	go func() {
 		for range ticker.C {
 			triggerRefresh()
+		}
+	}()
+	countryTicker := time.NewTicker(cfg.CountryReprobeInterval)
+	go func() {
+		for range countryTicker.C {
+			triggerCountryReprobe()
 		}
 	}()
 
@@ -113,6 +120,25 @@ func triggerRefresh() {
 			}
 		}()
 		refreshSubscriptions()
+	}()
+}
+
+func triggerCountryReprobe() {
+	if !countryReprobing.CompareAndSwap(0, 1) {
+		return
+	}
+	go func() {
+		defer countryReprobing.Store(0)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[country-reprobe] panic recovered: %v", r)
+			}
+		}()
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		result := service.ReprobeWarpCountries(ctx)
+		log.Printf("[country-reprobe] done in %s: candidates=%d updated=%d country_warp=%v country_state_save_failed=%t", time.Since(start), result.Candidates, result.Updated, result.WarpCountrySources, result.CountryStateSaveFailed)
 	}()
 }
 

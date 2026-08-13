@@ -92,6 +92,12 @@ func NeedsReprobe(route RouteCountries) bool {
 	return familyNeedsReprobe(route.DirectV4, route.DirectV6) || familyNeedsReprobe(route.WarpV4, route.WarpV6)
 }
 
+// NeedsWarpReprobe reports whether final WARP egress country evidence is
+// unresolved. Direct evidence is deliberately irrelevant for WARP profiles.
+func NeedsWarpReprobe(route RouteCountries) bool {
+	return familyNeedsReprobe(route.WarpV4, route.WarpV6)
+}
+
 func familyNeedsReprobe(primary, secondary FamilyResult) bool {
 	if primary.Available && primary.Status == Confirmed && primary.Country != "" {
 		return secondary.Available && (secondary.Status != Confirmed || secondary.Country == "")

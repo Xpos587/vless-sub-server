@@ -121,7 +121,8 @@ fetch → stale-source merge → parse → DNS → exact-chain route geo + healt
 4. **exit-IP + health probe** — xray-core in-process: direct and `proxy -> WARP`
    egress observations plus five sequential `speed.cloudflare.com/__down?bytes=0`
    samples; direct geo uses ipwho.is then Cloudflare trace, while WARP geo uses
-   Cloudflare trace then ipwho.is; trace `colo` is never treated as a country
+   Cloudflare trace, ipwho.is, then country.is; trace `colo` is never treated as
+   a country
 5. **quality** — median latency, loss, jitter, EWMA score, and recovery state
 6. **bandwidth** — at most a configured global byte budget, selected before any
    download begins; failed bandwidth measurements are neutral
@@ -150,9 +151,17 @@ fetch → stale-source merge → parse → DNS → exact-chain route geo + healt
 | `BANDWIDTH_REFRESH_AFTER` | `2h` | Minimum age before a successful bandwidth sample is renewed |
 | `BANDWIDTH_RETRY_AFTER` | `30m` | Delay before retrying a failed bandwidth sample |
 | `SOURCE_STALE_MAX_AGE` | `6h` | Per-source fallback age for timeout, 429, and 5xx failures |
+| `COUNTRY_STATE_PATH` | `""` | Optional durable file for opaque hashed route-country evidence; written `0600` |
+| `COUNTRY_REPROBE_INTERVAL` | `5m` | Interval for WARP-only country retries of unresolved WARP routes |
 | `MAX_CONCURRENT` | `50` | Concurrency limit |
 | `GEO_DAT_DIR` | `/usr/local/share/xray` | Xray geo dat files |
 | `DNS_CACHE_TTL` | `10m` | DNS cache TTL |
+
+The WARP-only retry neither fetches subscriptions nor runs direct health or
+bandwidth probes. It observes only `proxy -> WARP -> Internet` for profiles
+whose final WARP-country evidence is missing or conflicting. The optional state
+file contains opaque identity hashes and country evidence, never subscription
+URLs, proxy addresses, or credentials.
 
 ## Architecture
 

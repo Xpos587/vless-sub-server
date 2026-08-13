@@ -112,8 +112,15 @@ internal/
 | `BANDWIDTH_REFRESH_AFTER` | `2h` | Re-sample interval after bandwidth success |
 | `BANDWIDTH_RETRY_AFTER` | `30m` | Retry interval after bandwidth failure |
 | `SOURCE_STALE_MAX_AGE` | `6h` | Per-source timeout/429/5xx fallback age |
+| `COUNTRY_STATE_PATH` | `""` | Optional durable state file for hashed route-country evidence (mode `0600`) |
+| `COUNTRY_REPROBE_INTERVAL` | `5m` | WARP-only retry cadence for missing or conflicting final WARP countries |
 | `MAX_CONCURRENT` | `50` | Concurrency limit for probes |
 | `GEO_DAT_DIR` | `/usr/local/share/xray` | Xray geo dat files |
+
+The country reprobe only issues final `proxy -> WARP` country observations for
+unresolved WARP routes; it does not fetch sources, rerun direct health probes,
+or consume bandwidth-probe budget. Persisted state contains opaque identity
+hashes and country evidence, never addresses, credentials, or subscription URLs.
 
 ## Endpoints
 

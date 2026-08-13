@@ -4,6 +4,7 @@ package pipeline
 import (
 	"context"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,6 +51,12 @@ type RefreshResult struct {
 	DirectCountrySources, WarpCountrySources map[string]int
 }
 
+type CountryReprobeResult struct {
+	Candidates, Updated    int
+	CountryStateSaveFailed bool
+	WarpCountrySources     map[string]int
+}
+
 type Pipeline struct {
 	cfg          *config.Config
 	dnsCache     *dns.DNSCache
@@ -57,6 +64,7 @@ type Pipeline struct {
 	runtime      *quality.Store
 	countryState *country.StateStore
 	cache        atomic.Value // stores *CachedData
+	refreshMu    sync.Mutex   // Refresh and country-only reprobes share mutable runtime state.
 }
 
 const bandwidthStageTimeout = 30 * time.Second
@@ -103,6 +111,9 @@ func StateRank(state string) int {
 }
 
 func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+
 	now := time.Now()
 	result := RefreshResult{DirectCountrySources: make(map[string]int), WarpCountrySources: make(map[string]int)}
 	fetched := fetch.FetchSubscriptions(ctx, p.cfg.SubscriptionURLs, 15*time.Second)
@@ -223,6 +234,84 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	result.Published = true
 	p.dnsCache.Purge()
 	return result
+}
+
+// ReprobeWarpCountries refreshes unresolved final WARP egress evidence without
+// fetching subscriptions or running direct-health and bandwidth probes.
+func (p *Pipeline) ReprobeWarpCountries(ctx context.Context) CountryReprobeResult {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+
+	result := CountryReprobeResult{WarpCountrySources: make(map[string]int)}
+	cached, ok := p.Cached()
+	if !ok {
+		return result
+	}
+	candidates := selectWarpReprobeCandidates(cached.Entries)
+	result.Candidates = len(candidates)
+	if len(candidates) == 0 {
+		return result
+	}
+
+	ep := exitprobe.NewExitProber(p.cfg)
+	if ep.StartWithProxies(candidates) != nil {
+		return result
+	}
+	defer ep.Stop()
+	probes := ep.ProbeWarpCountries(ctx, candidates)
+	now := time.Now()
+	changed := false
+	for index, record := range candidates {
+		probe := probes[index]
+		result.WarpCountrySources[probe.Source]++
+		key := identity(record)
+		runtime, exists := p.runtime.Get(key)
+		if !exists {
+			continue
+		}
+		previous := runtime.Countries
+		runtime.Countries = country.Apply(runtime.Countries, true, probe.Country, now)
+		if runtime.Countries == previous {
+			continue
+		}
+		p.runtime.Set(runtime)
+		if p.countryState != nil {
+			p.countryState.Set(key, runtime.Countries)
+		}
+		result.Updated++
+		changed = true
+	}
+	if changed {
+		p.rebuildCachedCountries(cached)
+	}
+	if p.countryState != nil && changed {
+		if err := p.countryState.Save(); err != nil {
+			result.CountryStateSaveFailed = true
+		}
+	}
+	return result
+}
+
+func (p *Pipeline) rebuildCachedCountries(cached *CachedData) {
+	entries := cloneCachedEntries(cached.Entries)
+	directEntries := make([]rename.RenamedEntry, 0, len(entries))
+	warpEntries := make([]rename.RenamedEntry, 0, len(entries))
+	for index := range entries {
+		runtime, ok := p.runtime.Get(identity(entries[index].Entry.Record))
+		if !ok {
+			continue
+		}
+		entries[index].Countries = runtime.Countries
+		entries[index].DirectHealthy = runtime.DirectHealthy
+		entries[index].WarpHealthy = runtime.WarpHealthy
+		if runtime.DirectHealthy {
+			directEntries = append(directEntries, entries[index].Entry)
+		}
+		if runtime.WarpHealthy {
+			warpEntries = append(warpEntries, entries[index].Entry)
+		}
+	}
+	p.cache.Store(&CachedData{Entries: entries, Metadata: cached.Metadata, Output: format.FormatOutput(directEntries, cached.Metadata), JSONOutput: format.FormatXrayJSON(warpEntries, cached.Metadata), LastRefresh: cached.LastRefresh})
 }
 
 func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, now time.Time) {
@@ -380,9 +469,19 @@ func cloneGeo(info *geo.GeoInfo) *geo.GeoInfo {
 func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
 	result := make([]CachedEntry, len(entries))
 	for i, entry := range entries {
-		result[i] = CachedEntry{Entry: cloneRenamedEntry(entry.Entry), Countries: entry.Countries}
+		result[i] = CachedEntry{Entry: cloneRenamedEntry(entry.Entry), Countries: entry.Countries, DirectHealthy: entry.DirectHealthy, WarpHealthy: entry.WarpHealthy}
 	}
 	return result
+}
+
+func selectWarpReprobeCandidates(entries []CachedEntry) []parse.ProxyRecord {
+	candidates := make([]parse.ProxyRecord, 0, len(entries))
+	for _, entry := range entries {
+		if entry.WarpHealthy && country.NeedsWarpReprobe(entry.Countries) {
+			candidates = append(candidates, entry.Entry.Record)
+		}
+	}
+	return candidates
 }
 
 func cloneRenamedEntry(entry rename.RenamedEntry) rename.RenamedEntry {

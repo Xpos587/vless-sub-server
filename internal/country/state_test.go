@@ -62,3 +62,14 @@ func TestNeedsReprobePrioritizesMissingRouteEvidence(t *testing.T) {
 		t.Fatal("conflicting direct evidence not selected for reprobe")
 	}
 }
+
+func TestNeedsWarpReprobeIgnoresMissingDirectEvidence(t *testing.T) {
+	route := RouteCountries{WarpV4: FamilyResult{Available: true, Country: "FI", Status: Confirmed}}
+	if NeedsWarpReprobe(route) {
+		t.Fatal("confirmed WARP route selected because direct evidence is absent")
+	}
+	route.WarpV4 = FamilyResult{}
+	if !NeedsWarpReprobe(route) {
+		t.Fatal("missing WARP evidence not selected")
+	}
+}
