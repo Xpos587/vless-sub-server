@@ -30,6 +30,9 @@ var (
 func main() {
 	cfg = loadConfig()
 	service = pipeline.New(cfg, dns.NewDNSCache(cfg.DNSCacheTTL))
+	if err := service.LoadCountryState(cfg.CountryStatePath); err != nil {
+		log.Printf("[country-state] unavailable; continuing without persisted evidence")
+	}
 
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
@@ -95,7 +98,7 @@ func refreshSubscriptions() {
 	defer cancel()
 
 	result := service.Refresh(ctx)
-	log.Printf("[refresh] done in %s: parsed=%d resolved=%d good=%d partial=%d dead=%d bandwidth=%d/%d country_direct=%v country_warp=%v published=%t", time.Since(start), result.Parsed, result.Resolved, result.Good, result.Partial, result.Dead, result.BandwidthSuccesses, result.BandwidthCandidates, result.DirectCountrySources, result.WarpCountrySources, result.Published)
+	log.Printf("[refresh] done in %s: parsed=%d resolved=%d good=%d partial=%d dead=%d bandwidth=%d/%d country_direct=%v country_warp=%v country_state_save_failed=%t published=%t", time.Since(start), result.Parsed, result.Resolved, result.Good, result.Partial, result.Dead, result.BandwidthSuccesses, result.BandwidthCandidates, result.DirectCountrySources, result.WarpCountrySources, result.CountryStateSaveFailed, result.Published)
 }
 
 func triggerRefresh() {

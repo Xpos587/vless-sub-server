@@ -9,48 +9,51 @@ import (
 )
 
 type Config struct {
-	Port                  int           `env:"PORT" envDefault:"8080"`
-	RefreshInterval       time.Duration `env:"REFRESH_INTERVAL" envDefault:"30m"`
-	SubscriptionURLs      []string      `env:"SUBSCRIPTION_URLS,required" envSeparator:","`
-	NameInclude           string        `env:"NAME_INCLUDE"`
-	NameExclude           string        `env:"NAME_EXCLUDE"`
-	DNSTimeout            time.Duration `env:"DNS_TIMEOUT" envDefault:"2s"`
-	DNSCacheTTL           time.Duration `env:"DNS_CACHE_TTL" envDefault:"10m"`
-	ExitProbeTimeout      time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
-	ProbeSampleCount      int           `env:"PROBE_SAMPLE_COUNT" envDefault:"5"`
-	ProbeSampleGap        time.Duration `env:"PROBE_SAMPLE_GAP" envDefault:"100ms"`
-	ProbeSampleTimeout    time.Duration `env:"PROBE_SAMPLE_TIMEOUT" envDefault:"5s"`
-	BandwidthEnabled      bool          `env:"BANDWIDTH_ENABLED" envDefault:"true"`
-	BandwidthBytes        int64         `env:"BANDWIDTH_BYTES" envDefault:"1048576"`
-	BandwidthBudget       int64         `env:"BANDWIDTH_BUDGET_BYTES" envDefault:"33554432"`
-	BandwidthTimeout      time.Duration `env:"BANDWIDTH_TIMEOUT" envDefault:"8s"`
-	BandwidthRefreshAfter time.Duration `env:"BANDWIDTH_REFRESH_AFTER" envDefault:"2h"`
-	BandwidthRetryAfter   time.Duration `env:"BANDWIDTH_RETRY_AFTER" envDefault:"30m"`
-	SourceStaleMaxAge     time.Duration `env:"SOURCE_STALE_MAX_AGE" envDefault:"6h"`
-	MaxConcurrent         int           `env:"MAX_CONCURRENT" envDefault:"50"`
-	GeoDatDir             string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
-	Hwid                  string        `env:"HWID,required"`
+	Port                   int           `env:"PORT" envDefault:"8080"`
+	RefreshInterval        time.Duration `env:"REFRESH_INTERVAL" envDefault:"30m"`
+	SubscriptionURLs       []string      `env:"SUBSCRIPTION_URLS,required" envSeparator:","`
+	NameInclude            string        `env:"NAME_INCLUDE"`
+	NameExclude            string        `env:"NAME_EXCLUDE"`
+	DNSTimeout             time.Duration `env:"DNS_TIMEOUT" envDefault:"2s"`
+	DNSCacheTTL            time.Duration `env:"DNS_CACHE_TTL" envDefault:"10m"`
+	ExitProbeTimeout       time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
+	ProbeSampleCount       int           `env:"PROBE_SAMPLE_COUNT" envDefault:"5"`
+	ProbeSampleGap         time.Duration `env:"PROBE_SAMPLE_GAP" envDefault:"100ms"`
+	ProbeSampleTimeout     time.Duration `env:"PROBE_SAMPLE_TIMEOUT" envDefault:"5s"`
+	BandwidthEnabled       bool          `env:"BANDWIDTH_ENABLED" envDefault:"true"`
+	BandwidthBytes         int64         `env:"BANDWIDTH_BYTES" envDefault:"1048576"`
+	BandwidthBudget        int64         `env:"BANDWIDTH_BUDGET_BYTES" envDefault:"33554432"`
+	BandwidthTimeout       time.Duration `env:"BANDWIDTH_TIMEOUT" envDefault:"8s"`
+	BandwidthRefreshAfter  time.Duration `env:"BANDWIDTH_REFRESH_AFTER" envDefault:"2h"`
+	BandwidthRetryAfter    time.Duration `env:"BANDWIDTH_RETRY_AFTER" envDefault:"30m"`
+	SourceStaleMaxAge      time.Duration `env:"SOURCE_STALE_MAX_AGE" envDefault:"6h"`
+	CountryStatePath       string        `env:"COUNTRY_STATE_PATH"`
+	CountryReprobeInterval time.Duration `env:"COUNTRY_REPROBE_INTERVAL" envDefault:"5m"`
+	MaxConcurrent          int           `env:"MAX_CONCURRENT" envDefault:"50"`
+	GeoDatDir              string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
+	Hwid                   string        `env:"HWID,required"`
 }
 
 func Load() (*Config, error) {
 	c := &Config{
-		Port:                  8080,
-		RefreshInterval:       30 * time.Minute,
-		DNSTimeout:            2 * time.Second,
-		DNSCacheTTL:           10 * time.Minute,
-		ExitProbeTimeout:      12 * time.Second,
-		ProbeSampleCount:      5,
-		ProbeSampleGap:        100 * time.Millisecond,
-		ProbeSampleTimeout:    5 * time.Second,
-		BandwidthEnabled:      true,
-		BandwidthBytes:        1 << 20,
-		BandwidthBudget:       32 << 20,
-		BandwidthTimeout:      8 * time.Second,
-		BandwidthRefreshAfter: 2 * time.Hour,
-		BandwidthRetryAfter:   30 * time.Minute,
-		SourceStaleMaxAge:     6 * time.Hour,
-		MaxConcurrent:         50,
-		GeoDatDir:             "/usr/local/share/xray",
+		Port:                   8080,
+		RefreshInterval:        30 * time.Minute,
+		DNSTimeout:             2 * time.Second,
+		DNSCacheTTL:            10 * time.Minute,
+		ExitProbeTimeout:       12 * time.Second,
+		ProbeSampleCount:       5,
+		ProbeSampleGap:         100 * time.Millisecond,
+		ProbeSampleTimeout:     5 * time.Second,
+		BandwidthEnabled:       true,
+		BandwidthBytes:         1 << 20,
+		BandwidthBudget:        32 << 20,
+		BandwidthTimeout:       8 * time.Second,
+		BandwidthRefreshAfter:  2 * time.Hour,
+		BandwidthRetryAfter:    30 * time.Minute,
+		SourceStaleMaxAge:      6 * time.Hour,
+		CountryReprobeInterval: 5 * time.Minute,
+		MaxConcurrent:          50,
+		GeoDatDir:              "/usr/local/share/xray",
 	}
 	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
 		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
@@ -101,6 +104,10 @@ func Load() (*Config, error) {
 	if c.SourceStaleMaxAge, err = durationEnv("SOURCE_STALE_MAX_AGE", c.SourceStaleMaxAge); err != nil || c.SourceStaleMaxAge <= 0 {
 		return nil, fmt.Errorf("SOURCE_STALE_MAX_AGE must be positive")
 	}
+	if c.CountryReprobeInterval, err = durationEnv("COUNTRY_REPROBE_INTERVAL", c.CountryReprobeInterval); err != nil || c.CountryReprobeInterval <= 0 {
+		return nil, fmt.Errorf("COUNTRY_REPROBE_INTERVAL must be positive")
+	}
+	c.CountryStatePath = os.Getenv("COUNTRY_STATE_PATH")
 	if c.BandwidthBytes, err = int64Env("BANDWIDTH_BYTES", c.BandwidthBytes); err != nil || c.BandwidthBytes < 64<<10 || c.BandwidthBytes > 8<<20 {
 		return nil, fmt.Errorf("BANDWIDTH_BYTES must be between 64KiB and 8MiB")
 	}

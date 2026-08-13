@@ -44,21 +44,34 @@ type RefreshResult struct {
 	Parsed, Resolved                         int
 	Good, Partial, Dead                      int
 	BandwidthCandidates, BandwidthSuccesses  int
+	CountryStateSaveFailed                   bool
 	DirectCountrySources, WarpCountrySources map[string]int
 }
 
 type Pipeline struct {
-	cfg         *config.Config
-	dnsCache    *dns.DNSCache
-	sourceCache *fetch.SourceCache
-	runtime     *quality.Store
-	cache       atomic.Value // stores *CachedData
+	cfg          *config.Config
+	dnsCache     *dns.DNSCache
+	sourceCache  *fetch.SourceCache
+	runtime      *quality.Store
+	countryState *country.StateStore
+	cache        atomic.Value // stores *CachedData
 }
 
 const bandwidthStageTimeout = 30 * time.Second
 
 func New(cfg *config.Config, dnsCache *dns.DNSCache) *Pipeline {
-	return &Pipeline{cfg: cfg, dnsCache: dnsCache, sourceCache: fetch.NewSourceCache(), runtime: quality.NewStore()}
+	state, _ := country.OpenStateStore("")
+	return &Pipeline{cfg: cfg, dnsCache: dnsCache, sourceCache: fetch.NewSourceCache(), runtime: quality.NewStore(), countryState: state}
+}
+
+// LoadCountryState enables durable country evidence before the first refresh.
+func (p *Pipeline) LoadCountryState(path string) error {
+	state, err := country.OpenStateStore(path)
+	if err != nil {
+		return err
+	}
+	p.countryState = state
+	return nil
 }
 
 func (p *Pipeline) Cached() (*CachedData, bool) {
@@ -191,6 +204,11 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), Countries: entries[i].Countries}
 	}
 	p.cache.Store(&CachedData{Entries: cachedEntries, Metadata: meta, Output: format.FormatOutput(renamed, meta), JSONOutput: format.FormatXrayJSON(renamed, meta), LastRefresh: now})
+	if p.countryState != nil {
+		if err := p.countryState.Save(); err != nil {
+			result.CountryStateSaveFailed = true
+		}
+	}
 	result.Published = true
 	p.dnsCache.Purge()
 	return result
@@ -198,6 +216,11 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 
 func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, now time.Time) {
 	previous, exists := p.runtime.Get(key)
+	if !exists && p.countryState != nil {
+		if countries, found := p.countryState.Get(key); found {
+			previous.Countries = countries
+		}
+	}
 	metrics := quality.Metrics{}
 	if probe != nil {
 		metrics = probe.Metrics
@@ -232,6 +255,9 @@ func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, n
 		runtime.Countries = country.Apply(runtime.Countries, true, probe.WarpCountry, now)
 	}
 	p.runtime.Set(runtime)
+	if p.countryState != nil {
+		p.countryState.Set(key, runtime.Countries)
+	}
 }
 
 func (p *Pipeline) activeRuntime(active map[string]int) []quality.Runtime {

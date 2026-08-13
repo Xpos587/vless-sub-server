@@ -33,6 +33,15 @@ func TestAggregateHealthSamplesCalculatesMedian(t *testing.T) {
 	}
 }
 
+func TestHealthProbeAcceptsSuccessfulNonEmptyDownloadResponse(t *testing.T) {
+	if !healthResponseOK([]byte("ok"), true) {
+		t.Fatal("successful health response with a body was rejected")
+	}
+	if healthResponseOK(nil, false) {
+		t.Fatal("failed health response was accepted")
+	}
+}
+
 func TestBuildOutboundSSProtocol(t *testing.T) {
 	rec := parse.ProxyRecord{
 		Protocol:       parse.SS,
@@ -179,6 +188,28 @@ func TestParseCloudflareTraceUsesFinalIPAndLocNotColo(t *testing.T) {
 	}
 	if observation.IP != netip.MustParseAddr("2606:4700:1234::1") || observation.Country != "FI" {
 		t.Fatalf("observation = %#v", observation)
+	}
+}
+
+func TestParseCountryIsUsesObservedIPAndCountry(t *testing.T) {
+	observation, ok := parseCountryIs([]byte(`{"ip":"198.51.100.4","country":"FI"}`))
+	if !ok || observation.IP != netip.MustParseAddr("198.51.100.4") || observation.Country != "FI" {
+		t.Fatalf("observation = %#v, ok=%t", observation, ok)
+	}
+}
+
+func TestProbeCountryUsesCountryIsAfterOtherWitnessesFail(t *testing.T) {
+	var targets []string
+	request := func(_ context.Context, _, target string, _ time.Duration) ([]byte, bool) {
+		targets = append(targets, target)
+		if target == countryIsAPIURL {
+			return []byte(`{"ip":"198.51.100.4","country":"FI"}`), true
+		}
+		return nil, false
+	}
+	observation, source := probeCountry(context.Background(), request, "warp_0_out", time.Second, traceWitness, ipWhoisWitness, countryIsWitness)
+	if source != "country-is" || observation.Country != "FI" || len(targets) != 3 {
+		t.Fatalf("observation=%#v source=%q targets=%#v", observation, source, targets)
 	}
 }
 

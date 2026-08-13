@@ -34,6 +34,7 @@ import (
 const (
 	geoAPIURL       = "https://ipwho.is/"
 	traceAPIURL     = "https://speed.cloudflare.com/cdn-cgi/trace"
+	countryIsAPIURL = "https://api.country.is/"
 	healthAPIURL    = "https://speed.cloudflare.com/__down?bytes=0"
 	bandwidthAPIURL = "https://speed.cloudflare.com/__down?bytes="
 )
@@ -178,7 +179,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	warpCountry := country.Observation{}
 	warpSource := "none"
 	if idx < len(ep.warpTags) {
-		warpCountry, warpSource = probeCountry(ctx, ep.request, ep.warpTags[idx], ep.cfg.ExitProbeTimeout, traceWitness, ipWhoisWitness)
+		warpCountry, warpSource = probeCountry(ctx, ep.request, ep.warpTags[idx], ep.cfg.ExitProbeTimeout, traceWitness, ipWhoisWitness, countryIsWitness)
 	}
 	if !geoOK {
 		directSource = "none"
@@ -196,7 +197,7 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	for i := 0; i < sampleCount; i++ {
 		start := time.Now()
 		body, ok := ep.request(ctx, outboundTag, healthAPIURL, sampleTimeout)
-		if ok && len(body) == 0 {
+		if healthResponseOK(body, ok) {
 			samples = append(samples, time.Since(start))
 		}
 		if i+1 < sampleCount && ep.cfg.ProbeSampleGap > 0 {
@@ -216,6 +217,8 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 	}
 	return buildProbeResult(ipResp, directCountry, directSource, warpCountry, warpSource, metrics)
 }
+
+func healthResponseOK(_ []byte, requestOK bool) bool { return requestOK }
 
 func retryMissingCountries(
 	ctx context.Context,
@@ -283,8 +286,9 @@ type countryWitness struct {
 }
 
 var (
-	traceWitness   = countryWitness{source: "cf-trace", target: traceAPIURL, parse: parseCloudflareTrace}
-	ipWhoisWitness = countryWitness{source: "ipwho", target: geoAPIURL, parse: parseIPWhoisBody}
+	traceWitness     = countryWitness{source: "cf-trace", target: traceAPIURL, parse: parseCloudflareTrace}
+	ipWhoisWitness   = countryWitness{source: "ipwho", target: geoAPIURL, parse: parseIPWhoisBody}
+	countryIsWitness = countryWitness{source: "country-is", target: countryIsAPIURL, parse: parseCountryIs}
 )
 
 func probeCountry(ctx context.Context, request countryRequester, outboundTag string, timeout time.Duration, witnesses ...countryWitness) (country.Observation, string) {
@@ -306,6 +310,22 @@ func parseIPWhoisBody(body []byte) (country.Observation, bool) {
 		return country.Observation{}, false
 	}
 	return observationFromIPWhois(response)
+}
+
+func parseCountryIs(body []byte) (country.Observation, bool) {
+	var response struct {
+		IP      string `json:"ip"`
+		Country string `json:"country"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return country.Observation{}, false
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(response.IP))
+	code := strings.ToUpper(strings.TrimSpace(response.Country))
+	if err != nil || !country.IsCode(code) {
+		return country.Observation{}, false
+	}
+	return country.Observation{IP: ip.Unmap(), Country: code}, true
 }
 
 func observationFromIPWhois(response geo.IPWhoisResponse) (country.Observation, bool) {
