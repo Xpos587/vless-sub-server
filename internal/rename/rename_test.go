@@ -7,7 +7,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/parse"
 )
 
-func TestRenameAllPreservesDistinctRegionsBehindSharedCredentialGateway(t *testing.T) {
+func TestRenameAllUsesObservedExitGeoForSharedCredentialGateway(t *testing.T) {
 	shared := map[string]string{
 		"type": "tcp", "security": "reality", "flow": "xtls-rprx-vision",
 		"sni": "www.booking.com", "pbk": "shared-key", "sid": "shared-id",
@@ -24,9 +24,9 @@ func TestRenameAllPreservesDistinctRegionsBehindSharedCredentialGateway(t *testi
 
 	got := RenameAll(records)
 	want := []string{
-		"🇳🇿 Новая Зеландия (VolnaApp LLP)",
-		"🇲🇾 Малайзия (VolnaApp LLP)",
-		"🇻🇳 Вьетнам (VolnaApp LLP)",
+		"🇭🇰 Hong Kong (VolnaApp LLP)",
+		"🇭🇰 Hong Kong (VolnaApp LLP) (2)",
+		"🇭🇰 Hong Kong (VolnaApp LLP) (3)",
 	}
 	for i := range want {
 		if got[i].RenamedFragment != want[i] {
@@ -66,7 +66,7 @@ func TestRenameAllUsesObservedGeoForStandaloneAutoRoute(t *testing.T) {
 	}
 }
 
-func TestRenameAllDoesNotInventCountryForAutoRouteInSharedGateway(t *testing.T) {
+func TestRenameAllUsesObservedExitGeoForAutoRouteInSharedGateway(t *testing.T) {
 	shared := map[string]string{"type": "tcp", "security": "reality", "flow": "xtls-rprx-vision", "sni": "www.booking.com", "pbk": "shared-key", "sid": "shared-id"}
 	records := []struct {
 		Record parse.ProxyRecord
@@ -78,8 +78,19 @@ func TestRenameAllDoesNotInventCountryForAutoRouteInSharedGateway(t *testing.T) 
 	}
 
 	got := RenameAll(records)
-	if got[0].RenamedFragment != "АВТОВЫБОР (VolnaApp LLP)" {
+	if got[0].RenamedFragment != "🇭🇰 Hong Kong (VolnaApp LLP)" {
 		t.Fatalf("auto name = %q", got[0].RenamedFragment)
+	}
+}
+
+func TestRenameAllUsesStandardUnknownFallback(t *testing.T) {
+	got := RenameAll([]struct {
+		Record parse.ProxyRecord
+		Geo    *geo.GeoInfo
+		IsLAN  bool
+	}{{Record: parse.ProxyRecord{Host: "unknown.example", Fragment: "🇷🇺 Русское upstream имя"}}})
+	if got[0].RenamedFragment != "🌐 Unknown (Unknown)" {
+		t.Fatalf("name = %q", got[0].RenamedFragment)
 	}
 }
 
