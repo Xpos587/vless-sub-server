@@ -46,6 +46,8 @@ podman run \
 |----------|-------------|
 | `GET /sub` | Subscription output (base64 lines with header) |
 | `GET /sub?format=json` | JSON array of xray-core configs (v2rayNG/MahsaNG) |
+| `GET /sub?format=json&profile=ru` | JSON with Russian bypass/blocking routing rules |
+| `GET /sub?format=json&profile=none` | JSON with only the proxy catch-all rule |
 | `GET /sub?warp=off&exclude=fi,ro` | URL output excluding direct egress countries |
 | `GET /sub?format=json&warp=on&exclude=fi,ro` | WARP JSON excluding final WARP egress countries |
 | `GET /health` | Health check, returns `ok` |
@@ -55,13 +57,16 @@ Query rules:
 - `format=url|json`; the default is `url`.
 - `warp=off|on`; URL defaults to `off`, JSON defaults to `on` for compatibility.
 - `warp=on` requires `format=json` because a URL link cannot encode the WARP hop.
+- `profile=ru|none` selects routing rules and requires `format=json` because
+  share links cannot encode Xray routing. `ru` is the compatibility default;
+  `none` leaves only the catch-all route to the selected proxy or WARP chain.
 - `exclude` accepts comma-separated ISO 3166-1 alpha-2 codes, case-insensitively.
 - With `warp=off`, exclusion uses the country websites observe through the direct proxy.
 - With `warp=on`, exclusion uses the final WARP egress country after `proxy -> WARP`.
 - Unknown or conflicting country evidence fails closed only when `exclude` is present.
 
-Responses expose aggregate diagnostics only: `X-Warp`, `X-Country-Filtered`,
-`X-Country-Unknown`, and `X-Country-Conflict`.
+Responses expose aggregate diagnostics only: `X-Warp`, `X-Profile`,
+`X-Country-Filtered`, `X-Country-Unknown`, and `X-Country-Conflict`.
 
 ## JSON Format (`?format=json`)
 
@@ -94,6 +99,11 @@ Traffic flow: inbound → routing catch-all rule sends to `warp-out-N` → WARP 
 
 `?format=json&warp=off` omits the WireGuard outbound and routes the catch-all
 directly to `proxy-N`.
+
+`?format=json&profile=ru` uses the Russian bypass profile: ads and selected
+connectivity endpoints are blocked; `geosite:category-ru`, private networks,
+and the explicitly listed local domains go direct; everything else follows the
+selected proxy chain. `profile=none` omits those policy rules entirely.
 
 ## xHTTP
 

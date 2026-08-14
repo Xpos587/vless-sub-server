@@ -12,15 +12,25 @@ import (
 )
 
 type XrayJSONOptions struct {
-	Warp bool
+	Warp    bool
+	Profile RoutingProfile
 }
+
+// RoutingProfile selects the policy rules embedded in a complete Xray config.
+// It has no representation in a standalone VLESS URL.
+type RoutingProfile string
+
+const (
+	RoutingProfileRussia RoutingProfile = "ru"
+	RoutingProfileNone   RoutingProfile = "none"
+)
 
 // FormatXrayJSON produces a JSON array of complete xray-core configs, one per proxy.
 // Each config includes: remarks, inbounds (socks+http), outbounds (proxy+warp+direct+block), routing.
 // v2rayNG detects JSON config by checking string contains "inbounds" && "outbounds" && "routing".
 // It then parses as Array<V2rayConfig> and creates a separate profile per element.
 func FormatXrayJSON(entries []rename.RenamedEntry, meta FormatMetadata) []byte {
-	return FormatXrayJSONWithOptions(entries, meta, XrayJSONOptions{Warp: true})
+	return FormatXrayJSONWithOptions(entries, meta, XrayJSONOptions{Warp: true, Profile: RoutingProfileRussia})
 }
 
 func FormatXrayJSONWithOptions(entries []rename.RenamedEntry, meta FormatMetadata, options XrayJSONOptions) []byte {
@@ -42,7 +52,7 @@ func FormatXrayJSONWithOptions(entries []rename.RenamedEntry, meta FormatMetadat
 			"log":       map[string]any{"loglevel": "warning"},
 			"inbounds":  buildInbounds(i + 1),
 			"outbounds": buildPerProxyOutbounds(ob, i+1, options.Warp),
-			"routing":   buildRoutingRules(i+1, options.Warp),
+			"routing":   buildRoutingRules(i+1, options.Warp, options.Profile),
 			"dns":       map[string]any{},
 		}
 		configs = append(configs, config)
@@ -463,14 +473,14 @@ func buildWarpOutbound(index int) map[string]any {
 	}
 }
 
-func buildRoutingRules(index int, warpEnabled bool) map[string]any {
+func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[string]any {
 	catchAllTag := fmt.Sprintf("proxy-%d", index)
 	if warpEnabled {
 		catchAllTag = fmt.Sprintf("warp-out-%d", index)
 	}
-	return map[string]any{
-		"domainStrategy": "IPIfNonMatch",
-		"rules": []any{
+	rules := []any{}
+	if profile != RoutingProfileNone {
+		rules = append(rules,
 			map[string]any{
 				"type":        "field",
 				"outboundTag": "block",
@@ -512,11 +522,17 @@ func buildRoutingRules(index int, warpEnabled bool) map[string]any {
 					".kg",
 				},
 			},
-			map[string]any{
-				"type":        "field",
-				"outboundTag": catchAllTag,
-				"port":        "0-65535",
-			},
+		)
+	}
+	rules = append(rules,
+		map[string]any{
+			"type":        "field",
+			"outboundTag": catchAllTag,
+			"port":        "0-65535",
 		},
+	)
+	return map[string]any{
+		"domainStrategy": "IPIfNonMatch",
+		"rules":          rules,
 	}
 }

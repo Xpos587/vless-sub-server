@@ -187,6 +187,11 @@ func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pip
 	w.Header().Set("Content-Length", strconv.Itoa(len(response.Body)))
 	w.Header().Set("X-Last-Refresh", data.LastRefresh.Format(time.RFC3339))
 	w.Header().Set("X-Warp", map[bool]string{true: "on", false: "off"}[options.Warp])
+	profile := "none"
+	if options.Format == subview.FormatJSON {
+		profile = string(options.Profile)
+	}
+	w.Header().Set("X-Profile", profile)
 	w.Header().Set("X-Country-Filtered", strconv.Itoa(response.Filtered))
 	w.Header().Set("X-Country-Unknown", strconv.Itoa(response.Unknown))
 	w.Header().Set("X-Country-Conflict", strconv.Itoa(response.Conflict))

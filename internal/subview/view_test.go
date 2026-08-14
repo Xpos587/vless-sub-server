@@ -91,6 +91,30 @@ func TestParseRejectsWarpForURLFormat(t *testing.T) {
 	}
 }
 
+func TestParseProfileSelectsRussianRoutingBundle(t *testing.T) {
+	options, err := Parse(url.Values{"format": {"json"}, "profile": {"ru"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Profile != format.RoutingProfileRussia {
+		t.Fatalf("profile = %q, want %q", options.Profile, format.RoutingProfileRussia)
+	}
+}
+
+func TestParseProfileRequiresJSON(t *testing.T) {
+	_, err := Parse(url.Values{"profile": {"ru"}})
+	if err == nil || err.Error() != "profile=ru requires format=json" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestParseRejectsUnknownProfile(t *testing.T) {
+	_, err := Parse(url.Values{"format": {"json"}, "profile": {"moon"}})
+	if err == nil || err.Error() != "unsupported profile \"moon\"" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestParseValidatesWarpAndFormat(t *testing.T) {
 	for name, values := range map[string]url.Values{
 		"warp":   {"warp": {"sometimes"}},

@@ -29,6 +29,7 @@ const (
 type Options struct {
 	Format  Format
 	Warp    bool
+	Profile format.RoutingProfile
 	Exclude map[string]struct{}
 }
 
@@ -48,7 +49,7 @@ func Parse(values url.Values) (Options, error) {
 // v2rayNG and INCY preserve full Xray configs; Exclave and Husi flatten their
 // outbounds and therefore cannot preserve the proxy -> WARP chain.
 func ParseForClient(values url.Values, client Client) (Options, error) {
-	options := Options{Format: FormatURL}
+	options := Options{Format: FormatURL, Profile: format.RoutingProfileRussia}
 	if value := values.Get("format"); value != "" {
 		options.Format = Format(value)
 	}
@@ -75,6 +76,19 @@ func ParseForClient(values url.Values, client Client) (Options, error) {
 	}
 	if options.Warp && options.Format != FormatJSON {
 		return Options{}, fmt.Errorf("warp=on requires format=json")
+	}
+	if value := values.Get("profile"); value != "" {
+		switch value {
+		case string(format.RoutingProfileRussia):
+			options.Profile = format.RoutingProfileRussia
+		case string(format.RoutingProfileNone):
+			options.Profile = format.RoutingProfileNone
+		default:
+			return Options{}, fmt.Errorf("unsupported profile %q", value)
+		}
+		if options.Format != FormatJSON {
+			return Options{}, fmt.Errorf("profile=%s requires format=json", value)
+		}
 	}
 
 	excluded, err := country.ParseCodes(values["exclude"])
@@ -105,7 +119,7 @@ func DetectClient(userAgent, xClient string) Client {
 }
 
 func Render(data *pipeline.CachedData, options Options) Response {
-	if len(options.Exclude) == 0 {
+	if len(options.Exclude) == 0 && (options.Profile == "" || options.Profile == format.RoutingProfileRussia) {
 		if options.Format == FormatURL && !options.Warp && data.Output != "" {
 			return Response{Body: []byte(data.Output), EntryCount: len(data.Entries)}
 		}
@@ -132,7 +146,7 @@ func Render(data *pipeline.CachedData, options Options) Response {
 	meta := data.Metadata
 	meta.TotalAlive = len(entries)
 	if options.Format == FormatJSON {
-		response.Body = format.FormatXrayJSONWithOptions(entries, meta, format.XrayJSONOptions{Warp: options.Warp})
+		response.Body = format.FormatXrayJSONWithOptions(entries, meta, format.XrayJSONOptions{Warp: options.Warp, Profile: options.Profile})
 		return response
 	}
 	response.Body = []byte(format.FormatOutput(entries, meta))

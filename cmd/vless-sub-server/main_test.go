@@ -32,6 +32,7 @@ func TestWriteSubscriptionResponseSetsCountryDiagnostics(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"X-Warp":             "on",
+		"X-Profile":          "ru",
 		"X-Country-Filtered": "1",
 		"X-Country-Unknown":  "0",
 		"X-Country-Conflict": "0",

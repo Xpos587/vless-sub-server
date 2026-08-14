@@ -583,6 +583,50 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 	}
 }
 
+func TestFormatXrayJSONWithOptionsNeutralProfileOmitsRussiaRules(t *testing.T) {
+	entries := []rename.RenamedEntry{{
+		Record:          parse.ProxyRecord{Protocol: parse.VLESS, Host: "example.com", Port: 443, UUIDOrPassword: "uuid", QueryParams: map[string]string{"type": "tcp"}},
+		RenamedFragment: "Example",
+	}}
+	config := parseSingleConfig(t, FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: false, Profile: RoutingProfileNone}))
+	rules := config["routing"].(map[string]any)["rules"].([]any)
+	if len(rules) != 1 {
+		t.Fatalf("routing rules = %d, want only catch-all", len(rules))
+	}
+	if rules[0].(map[string]any)["outboundTag"] != "proxy-1" {
+		t.Fatalf("catch-all = %#v", rules[0])
+	}
+}
+
+func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing.T) {
+	entries := []rename.RenamedEntry{{
+		Record:          parse.ProxyRecord{Protocol: parse.VLESS, Host: "example.com", Port: 443, UUIDOrPassword: "uuid", QueryParams: map[string]string{"type": "tcp"}},
+		RenamedFragment: "Example",
+	}}
+	config := parseSingleConfig(t, FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: false, Profile: RoutingProfileRussia}))
+	rules := config["routing"].(map[string]any)["rules"].([]any)
+	if len(rules) != 4 {
+		t.Fatalf("routing rules = %d, want 4", len(rules))
+	}
+	block := rules[0].(map[string]any)
+	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "domain:oneme.ru") {
+		t.Fatalf("block rule = %#v", block)
+	}
+	direct := rules[1].(map[string]any)
+	if direct["outboundTag"] != "direct" || !hasDomain(direct["domain"].([]any), "geosite:category-ru") {
+		t.Fatalf("direct rule = %#v", direct)
+	}
+}
+
+func hasDomain(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFormatXrayJSON_InboundsPresent(t *testing.T) {
 	entries := []rename.RenamedEntry{
 		{
