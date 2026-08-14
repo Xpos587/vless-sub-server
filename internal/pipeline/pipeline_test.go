@@ -63,6 +63,20 @@ func TestUpdateRuntimeStabilizesDirectAndWarpCountries(t *testing.T) {
 	}
 }
 
+func TestUpdateRuntimeRetainsFinalWarpGeoSeparately(t *testing.T) {
+	p := &Pipeline{runtime: quality.NewStore(), cfg: &config.Config{BandwidthRefreshAfter: time.Hour}}
+	key := "final-warp-geo"
+	p.updateRuntime(key, &exitprobe.ExitProbeResult{
+		Metrics:     quality.Metrics{InternetReachable: true, SampleCount: 5, SuccessCount: 5},
+		GeoInfo:     &geo.GeoInfo{CountryCode: "HK", City: "Hong Kong", ISP: "Gateway"},
+		WarpGeoInfo: &geo.GeoInfo{CountryCode: "VN", City: "Hanoi", ISP: "Cloudflare", IP: "203.0.113.20"},
+	}, time.Now())
+	runtime, _ := p.runtime.Get(key)
+	if runtime.WarpGeoInfo == nil || runtime.WarpGeoInfo.City != "Hanoi" {
+		t.Fatalf("runtime final WARP geo = %#v", runtime.WarpGeoInfo)
+	}
+}
+
 func TestStateRankOrdersRecoveringBeforeDegraded(t *testing.T) {
 	if !(StateRank("HEALTHY") < StateRank("RECOVERING") && StateRank("RECOVERING") < StateRank("DEGRADED")) {
 		t.Fatal("unexpected state ordering")
@@ -111,6 +125,22 @@ func TestOutputEntriesUsesEndpointGeoWhenDirectExitIsUnavailable(t *testing.T) {
 	}, &RefreshResult{})
 	if len(entries) != 1 || entries[0].Geo == nil || entries[0].Geo.City != "Warsaw" {
 		t.Fatalf("endpoint geo was not used: %#v", entries)
+	}
+}
+
+func TestOutputEntriesKeepsFinalWarpGeoSeparateFromDirectNameGeo(t *testing.T) {
+	p := &Pipeline{runtime: quality.NewStore()}
+	record := parse.ProxyRecord{Protocol: parse.VLESS, Host: "shared.example", Port: 443, UUIDOrPassword: "region"}
+	p.runtime.Set(quality.Runtime{
+		Key:         identity(record),
+		State:       quality.Healthy,
+		GeoInfo:     &geo.GeoInfo{CountryCode: "HK", City: "Hong Kong", ISP: "Gateway"},
+		WarpGeoInfo: &geo.GeoInfo{CountryCode: "VN", City: "Hanoi", ISP: "Cloudflare"},
+	})
+
+	entries, _ := p.outputEntries([]parse.ProxyRecord{record}, nil, map[string]*dns.DNSResult{"shared.example": {}}, &RefreshResult{})
+	if entries[0].WarpGeo == nil || entries[0].WarpGeo.City != "Hanoi" || entries[0].Geo.City != "Hong Kong" {
+		t.Fatalf("name geos = direct:%#v warp:%#v", entries[0].Geo, entries[0].WarpGeo)
 	}
 }
 

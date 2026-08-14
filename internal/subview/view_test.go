@@ -229,6 +229,20 @@ func TestRenderExcludesWarpOnlyEntriesFromDirectSubscription(t *testing.T) {
 	}
 }
 
+func TestRenderUsesFinalWarpNameForWarpJSONView(t *testing.T) {
+	data := sampleCache()
+	data.Entries[0].WarpEntry = renamed("🇻🇳 Hanoi (Cloudflare)", "first.example")
+
+	response := Render(data, Options{Format: FormatJSON, Warp: true})
+	var configs []map[string]any
+	if err := json.Unmarshal(response.Body, &configs); err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 2 || configs[0]["remarks"] != "🇻🇳 Hanoi (Cloudflare)" {
+		t.Fatalf("WARP config names = %#v", configs)
+	}
+}
+
 func sampleCache() *pipeline.CachedData {
 	return &pipeline.CachedData{
 		Entries: []pipeline.CachedEntry{

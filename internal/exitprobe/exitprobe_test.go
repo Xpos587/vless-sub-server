@@ -22,6 +22,46 @@ func TestAggregateHealthSamplesKeepsGeoOnlyProxyReachable(t *testing.T) {
 	}
 }
 
+func TestBuildProbeResultKeepsFinalWarpGeoSeparateFromDirectGeo(t *testing.T) {
+	directGeo := &geo.GeoInfo{CountryCode: "HK", City: "Hong Kong", ISP: "Gateway", IP: "198.51.100.10"}
+	warp := country.Observation{IP: netip.MustParseAddr("203.0.113.20"), Country: "VN"}
+
+	result := buildProbeResult(directGeo, country.Observation{IP: netip.MustParseAddr("198.51.100.10"), Country: "HK"}, "observer", warp, "cf-trace", quality.Metrics{})
+	if result.WarpGeoInfo == nil {
+		t.Fatal("final WARP geo is missing")
+	}
+	info := result.WarpGeoInfo
+	if info.CountryCode != "VN" || info.IP != "203.0.113.20" {
+		t.Fatalf("final WARP geo = %#v, want observed WARP IP in VN", info)
+	}
+	if result.GeoInfo == nil || result.GeoInfo.CountryCode != "HK" {
+		t.Fatalf("direct geo was changed: %#v", result.GeoInfo)
+	}
+}
+
+func TestFinalWarpGeoRejectsCityFromConflictingIPDatabaseCountry(t *testing.T) {
+	observed := country.Observation{IP: netip.MustParseAddr("203.0.113.20"), Country: "VN"}
+	lookup := &geo.GeoInfo{CountryCode: "HK", City: "Hong Kong", ISP: "Cloudflare", IP: "203.0.113.20"}
+
+	info := finalWarpGeo(observed, lookup)
+	if info.CountryCode != "VN" || info.IP != "203.0.113.20" {
+		t.Fatalf("final WARP geo = %#v, want observed country and IP", info)
+	}
+	if info.City != "" {
+		t.Fatalf("city from conflicting lookup was trusted: %#v", info)
+	}
+}
+
+func TestFinalWarpGeoKeepsCityFromMatchingIPDatabaseCountry(t *testing.T) {
+	observed := country.Observation{IP: netip.MustParseAddr("203.0.113.20"), Country: "VN"}
+	lookup := &geo.GeoInfo{CountryCode: "VN", City: "Hanoi", ISP: "Cloudflare", IP: "203.0.113.20"}
+
+	info := finalWarpGeo(observed, lookup)
+	if info.City != "Hanoi" || info.ISP != "Cloudflare" || info.CountryCode != "VN" {
+		t.Fatalf("final WARP geo = %#v, want matching lookup enrichment", info)
+	}
+}
+
 func TestAggregateHealthSamplesCalculatesMedian(t *testing.T) {
 	metrics := aggregateHealthSamples(
 		[]time.Duration{100 * time.Millisecond, 130 * time.Millisecond, 110 * time.Millisecond},

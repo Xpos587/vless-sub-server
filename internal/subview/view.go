@@ -140,7 +140,11 @@ func Render(data *pipeline.CachedData, options Options) Response {
 			response.Filtered++
 			continue
 		}
-		entries = append(entries, cached.Entry)
+		entry := cached.Entry
+		if options.Warp && cached.WarpEntry.Record.Protocol != "" {
+			entry = cached.WarpEntry
+		}
+		entries = append(entries, entry)
 	}
 	response.EntryCount = len(entries)
 	meta := data.Metadata

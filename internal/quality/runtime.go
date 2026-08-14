@@ -49,6 +49,7 @@ type Runtime struct {
 	LastBandwidthSuccessAt time.Time
 	LastSuccessfulAt       time.Time
 	GeoInfo                *geo.GeoInfo
+	WarpGeoInfo            *geo.GeoInfo
 	Countries              country.RouteCountries
 }
 type Store struct {

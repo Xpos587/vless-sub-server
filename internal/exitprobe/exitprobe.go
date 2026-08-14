@@ -46,6 +46,7 @@ type ExitProbeResult struct {
 	ExitIP        string
 	ExitLoc       string
 	GeoInfo       *geo.GeoInfo
+	WarpGeoInfo   *geo.GeoInfo
 	DirectCountry country.Observation
 	WarpCountry   country.Observation
 	DirectSource  string
@@ -296,7 +297,14 @@ func (ep *ExitProber) probeSingle(ctx context.Context, idx int, record parse.Pro
 			directCountry, directSource, warpCountry, warpSource, metrics.InternetReachable,
 		)
 	}
-	return buildProbeResult(directGeo, directCountry, directSource, warpCountry, warpSource, metrics)
+	result := buildProbeResult(directGeo, directCountry, directSource, warpCountry, warpSource, metrics)
+	if warpCountry.Valid() {
+		lookup, _, found := ep.lookupObservedExit(ctx, warpCountry.IP)
+		if found {
+			result.WarpGeoInfo = finalWarpGeo(warpCountry, lookup)
+		}
+	}
+	return result
 }
 
 func healthResponseOK(_ []byte, requestOK bool) bool { return requestOK }
@@ -340,7 +348,25 @@ func buildProbeResult(directGeo *geo.GeoInfo, directCountry country.Observation,
 		Metrics:       metrics,
 	}
 	result.GeoInfo = cloneGeoInfo(directGeo)
+	if warpCountry.Valid() {
+		result.WarpGeoInfo = &geo.GeoInfo{CountryCode: warpCountry.Country, IP: warpCountry.IP.String()}
+	}
 	return result
+}
+
+// finalWarpGeo preserves Cloudflare's exact-chain country observation. Public
+// IP databases only enrich city and provider when they agree on that country.
+func finalWarpGeo(observation country.Observation, lookup *geo.GeoInfo) *geo.GeoInfo {
+	if !observation.Valid() {
+		return nil
+	}
+	info := &geo.GeoInfo{CountryCode: observation.Country, IP: observation.IP.String()}
+	if lookup == nil || !strings.EqualFold(lookup.CountryCode, observation.Country) {
+		return info
+	}
+	info.City = lookup.City
+	info.ISP = lookup.ISP
+	return info
 }
 
 func geoInfoFromIPWhois(response geo.IPWhoisResponse, observation country.Observation) *geo.GeoInfo {

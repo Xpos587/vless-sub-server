@@ -31,6 +31,7 @@ type CachedData struct {
 
 type CachedEntry struct {
 	Entry         rename.RenamedEntry
+	WarpEntry     rename.RenamedEntry
 	Countries     country.RouteCountries
 	DirectHealthy bool
 	WarpHealthy   bool
@@ -39,6 +40,7 @@ type CachedEntry struct {
 type outputEntry struct {
 	Record    parse.ProxyRecord
 	Geo       *geo.GeoInfo
+	WarpGeo   *geo.GeoInfo
 	IsLAN     bool
 	Countries country.RouteCountries
 }
@@ -202,14 +204,25 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 		Geo    *geo.GeoInfo
 		IsLAN  bool
 	}, len(entries))
+	warpRenameInput := make([]struct {
+		Record parse.ProxyRecord
+		Geo    *geo.GeoInfo
+		IsLAN  bool
+	}, len(entries))
 	for i, entry := range entries {
 		renameInput[i] = struct {
 			Record parse.ProxyRecord
 			Geo    *geo.GeoInfo
 			IsLAN  bool
 		}{entry.Record, entry.Geo, entry.IsLAN}
+		warpRenameInput[i] = struct {
+			Record parse.ProxyRecord
+			Geo    *geo.GeoInfo
+			IsLAN  bool
+		}{entry.Record, entry.WarpGeo, entry.IsLAN}
 	}
 	renamed := rename.RenameAll(renameInput)
+	warpRenamed := rename.RenameAll(warpRenameInput)
 	sourcesOK := 0
 	for _, source := range fetched {
 		if source.Status == "ok" {
@@ -222,12 +235,12 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	warpEntries := make([]rename.RenamedEntry, 0, len(renamed))
 	for i, entry := range renamed {
 		runtime, _ := p.runtime.Get(identity(entries[i].Record))
-		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), Countries: entries[i].Countries, DirectHealthy: runtime.DirectHealthy, WarpHealthy: runtime.WarpHealthy}
+		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), WarpEntry: cloneRenamedEntry(warpRenamed[i]), Countries: entries[i].Countries, DirectHealthy: runtime.DirectHealthy, WarpHealthy: runtime.WarpHealthy}
 		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entry)
 		}
 		if runtime.WarpHealthy {
-			warpEntries = append(warpEntries, entry)
+			warpEntries = append(warpEntries, warpRenamed[i])
 		}
 	}
 	directMeta, warpMeta := meta, meta
@@ -315,7 +328,11 @@ func (p *Pipeline) rebuildCachedCountries(cached *CachedData) {
 			directEntries = append(directEntries, entries[index].Entry)
 		}
 		if runtime.WarpHealthy {
-			warpEntries = append(warpEntries, entries[index].Entry)
+			entry := entries[index].WarpEntry
+			if entry.Record.Protocol == "" {
+				entry = entries[index].Entry
+			}
+			warpEntries = append(warpEntries, entry)
 		}
 	}
 	directMeta, warpMeta := cached.Metadata, cached.Metadata
@@ -361,6 +378,9 @@ func (p *Pipeline) updateRuntime(key string, probe *exitprobe.ExitProbeResult, n
 	}
 	if probe != nil && probe.GeoInfo != nil {
 		runtime.GeoInfo = cloneGeo(probe.GeoInfo)
+	}
+	if probe != nil && probe.WarpGeoInfo != nil {
+		runtime.WarpGeoInfo = cloneGeo(probe.WarpGeoInfo)
 	}
 	if probe != nil {
 		runtime.Countries = country.Apply(runtime.Countries, false, probe.DirectCountry, now)
@@ -443,7 +463,7 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 	})
 	entries := make([]outputEntry, 0, len(items))
 	for _, item := range items {
-		entries = append(entries, outputEntry{Record: item.record, Geo: item.geo, IsLAN: item.lan, Countries: item.runtime.Countries})
+		entries = append(entries, outputEntry{Record: item.record, Geo: item.geo, WarpGeo: cloneGeo(item.runtime.WarpGeoInfo), IsLAN: item.lan, Countries: item.runtime.Countries})
 	}
 	return entries, geoAvailable
 }
@@ -503,7 +523,7 @@ func cloneGeo(info *geo.GeoInfo) *geo.GeoInfo {
 func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
 	result := make([]CachedEntry, len(entries))
 	for i, entry := range entries {
-		result[i] = CachedEntry{Entry: cloneRenamedEntry(entry.Entry), Countries: entry.Countries, DirectHealthy: entry.DirectHealthy, WarpHealthy: entry.WarpHealthy}
+		result[i] = CachedEntry{Entry: cloneRenamedEntry(entry.Entry), WarpEntry: cloneRenamedEntry(entry.WarpEntry), Countries: entry.Countries, DirectHealthy: entry.DirectHealthy, WarpHealthy: entry.WarpHealthy}
 	}
 	return result
 }
