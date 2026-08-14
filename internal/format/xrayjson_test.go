@@ -124,11 +124,11 @@ func TestFormatXrayJSON_VLESS_Reality(t *testing.T) {
 		t.Errorf("expected domainStrategy IPIfNonMatch, got %v", routing["domainStrategy"])
 	}
 	rules := routing["rules"].([]any)
-	if len(rules) != 4 {
-		t.Fatalf("expected 4 routing rules (block+direct+direct+catch-all warp), got %d", len(rules))
+	if len(rules) != 3 {
+		t.Fatalf("expected 3 routing rules (block+direct+catch-all warp), got %d", len(rules))
 	}
 	// Check catch-all WARP rule (last rule)
-	catchAll := rules[3].(map[string]any)
+	catchAll := rules[2].(map[string]any)
 	if catchAll["outboundTag"] != "warp-out-1" {
 		t.Errorf("expected catch-all rule to route to warp-out-1, got %v", catchAll["outboundTag"])
 	}
@@ -572,14 +572,23 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 		t.Error("block rule should contain geosite:category-ads")
 	}
 
-	// Rule 2: direct with domain_suffix
-	directRule2 := rules[2].(map[string]any)
-	if directRule2["outboundTag"] != "direct" {
-		t.Errorf("third rule should be direct, got %v", directRule2["outboundTag"])
+	// The Xray field-rule schema has no domain_suffix property. All direct
+	// domains, including the .kg matcher, must be expressed in domain.
+	directRule := rules[1].(map[string]any)
+	domains = directRule["domain"].([]any)
+	for _, want := range []string{
+		"geosite:category-ru",
+		"geosite:private",
+		"domain:kontur.host",
+		"domain:kg",
+		"domain:cardlink.link",
+	} {
+		if !hasDomain(domains, want) {
+			t.Errorf("direct rule missing %q: %v", want, domains)
+		}
 	}
-	suffixes := directRule2["domain_suffix"].([]any)
-	if len(suffixes) != 1 || suffixes[0] != ".kg" {
-		t.Errorf("expected domain_suffix [.kg], got %v", suffixes)
+	if _, exists := directRule["domain_suffix"]; exists {
+		t.Fatalf("Xray rule must not contain sing-box-only domain_suffix: %#v", directRule)
 	}
 }
 
@@ -605,15 +614,15 @@ func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing
 	}}
 	config := parseSingleConfig(t, FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: false, Profile: RoutingProfileRussia}))
 	rules := config["routing"].(map[string]any)["rules"].([]any)
-	if len(rules) != 4 {
-		t.Fatalf("routing rules = %d, want 4", len(rules))
+	if len(rules) != 3 {
+		t.Fatalf("routing rules = %d, want 3", len(rules))
 	}
 	block := rules[0].(map[string]any)
 	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "domain:oneme.ru") {
 		t.Fatalf("block rule = %#v", block)
 	}
 	direct := rules[1].(map[string]any)
-	if direct["outboundTag"] != "direct" || !hasDomain(direct["domain"].([]any), "geosite:category-ru") {
+	if direct["outboundTag"] != "direct" || !hasDomain(direct["domain"].([]any), "domain:kg") {
 		t.Fatalf("direct rule = %#v", direct)
 	}
 }

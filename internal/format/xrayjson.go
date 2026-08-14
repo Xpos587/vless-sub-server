@@ -506,20 +506,12 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 				"domain": []string{
 					"geosite:category-ru",
 					"geosite:private",
+					"domain:kontur.host",
+					"domain:kg",
+					"domain:cardlink.link",
 				},
 				"ip": []string{
 					"geoip:private",
-				},
-			},
-			map[string]any{
-				"type":        "field",
-				"outboundTag": "direct",
-				"domain": []string{
-					"domain:kontur.host",
-					"domain:cardlink.link",
-				},
-				"domain_suffix": []string{
-					".kg",
 				},
 			},
 		)
