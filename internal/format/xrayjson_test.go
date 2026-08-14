@@ -124,11 +124,11 @@ func TestFormatXrayJSON_VLESS_Reality(t *testing.T) {
 		t.Errorf("expected domainStrategy IPIfNonMatch, got %v", routing["domainStrategy"])
 	}
 	rules := routing["rules"].([]any)
-	if len(rules) != 3 {
-		t.Fatalf("expected 3 routing rules (block+direct+catch-all warp), got %d", len(rules))
+	if len(rules) != 4 {
+		t.Fatalf("expected 4 routing rules (block+domain direct+IP direct+catch-all warp), got %d", len(rules))
 	}
 	// Check catch-all WARP rule (last rule)
-	catchAll := rules[2].(map[string]any)
+	catchAll := rules[3].(map[string]any)
 	if catchAll["outboundTag"] != "warp-out-1" {
 		t.Errorf("expected catch-all rule to route to warp-out-1, got %v", catchAll["outboundTag"])
 	}
@@ -571,6 +571,9 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 	if !hasAds {
 		t.Error("block rule should contain geosite:category-ads")
 	}
+	if hasDomain(domains, "domain:calls.okcdn.ru") {
+		t.Fatal("calls.okcdn.ru must not be blocked")
+	}
 
 	// The Xray field-rule schema has no domain_suffix property. All direct
 	// domains, including the .kg matcher, must be expressed in domain.
@@ -614,8 +617,8 @@ func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing
 	}}
 	config := parseSingleConfig(t, FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: false, Profile: RoutingProfileRussia}))
 	rules := config["routing"].(map[string]any)["rules"].([]any)
-	if len(rules) != 3 {
-		t.Fatalf("routing rules = %d, want 3", len(rules))
+	if len(rules) != 4 {
+		t.Fatalf("routing rules = %d, want 4", len(rules))
 	}
 	block := rules[0].(map[string]any)
 	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "domain:oneme.ru") {
@@ -625,9 +628,16 @@ func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing
 	if direct["outboundTag"] != "direct" || !hasDomain(direct["domain"].([]any), "domain:kg") {
 		t.Fatalf("direct rule = %#v", direct)
 	}
+	if _, exists := direct["ip"]; exists {
+		t.Fatalf("domain direct rule must not combine IP matching: %#v", direct)
+	}
+	ipDirect := rules[2].(map[string]any)
+	if ipDirect["outboundTag"] != "direct" {
+		t.Fatalf("IP direct rule = %#v", ipDirect)
+	}
 	for _, want := range []string{"geoip:private", "geoip:ru"} {
-		if !hasDomain(direct["ip"].([]any), want) {
-			t.Fatalf("direct IP rule missing %q: %#v", want, direct)
+		if !hasDomain(ipDirect["ip"].([]any), want) {
+			t.Fatalf("direct IP rule missing %q: %#v", want, ipDirect)
 		}
 	}
 }

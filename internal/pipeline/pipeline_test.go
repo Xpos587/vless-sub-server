@@ -141,6 +141,28 @@ func TestCachedReturnsDeepCopiedTypedSnapshot(t *testing.T) {
 	}
 }
 
+func TestPersistentCacheRestoresLastKnownGoodSnapshot(t *testing.T) {
+	path := t.TempDir() + "/snapshot.json"
+	writer := &Pipeline{}
+	writer.cache.Store(&CachedData{
+		Output:      "subscription",
+		JSONOutput:  []byte(`[{"remarks":"cached"}]`),
+		Entries:     []CachedEntry{{Entry: rename.RenamedEntry{RenamedFragment: "Cached"}}},
+		LastRefresh: time.Date(2026, 8, 14, 7, 0, 0, 0, time.UTC),
+	})
+	if err := writer.SaveCached(path); err != nil {
+		t.Fatal(err)
+	}
+	reader := &Pipeline{}
+	if err := reader.LoadCached(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok := reader.Cached()
+	if !ok || loaded.Output != "subscription" || string(loaded.JSONOutput) != `[{"remarks":"cached"}]` || len(loaded.Entries) != 1 {
+		t.Fatalf("loaded cache = %#v", loaded)
+	}
+}
+
 func TestSelectWarpReprobeCandidatesSkipsConfirmedWarpRoutes(t *testing.T) {
 	entries := []CachedEntry{
 		{Entry: rename.RenamedEntry{Record: parse.ProxyRecord{Host: "confirmed"}}, WarpHealthy: true, Countries: country.RouteCountries{WarpV4: country.FamilyResult{Available: true, Country: "FI", Status: country.Confirmed}}},

@@ -162,6 +162,7 @@ fetch → stale-source merge → parse → DNS → exact-chain route geo + healt
 | `BANDWIDTH_RETRY_AFTER` | `30m` | Delay before retrying a failed bandwidth sample |
 | `SOURCE_STALE_MAX_AGE` | `6h` | Per-source fallback age for timeout, 429, and 5xx failures |
 | `COUNTRY_STATE_PATH` | `""` | Optional durable file for opaque hashed route-country evidence; written `0600` |
+| `CACHE_STATE_PATH` | `""` | Optional last-known-good subscription snapshot; restored before the first refresh and written `0600` |
 | `COUNTRY_REPROBE_INTERVAL` | `5m` | Interval for WARP-only country retries of unresolved WARP routes |
 | `MAX_CONCURRENT` | `50` | Concurrency limit |
 | `GEO_DAT_DIR` | `/usr/local/share/xray` | Xray geo dat files |

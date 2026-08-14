@@ -494,7 +494,6 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 					"domain:api.ipify.org",
 					"domain:checkip.amazonaws.com",
 					"domain:ip.mail.ru",
-					"domain:calls.okcdn.ru",
 					"domain:mtalk.google.com",
 					"domain:main.telegram.org",
 					"domain:mmg.whatsapp.net",
@@ -510,6 +509,10 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 					"domain:kg",
 					"domain:cardlink.link",
 				},
+			},
+			map[string]any{
+				"type":        "field",
+				"outboundTag": "direct",
 				"ip": []string{
 					"geoip:private",
 					"geoip:ru",

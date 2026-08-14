@@ -36,6 +36,11 @@ func main() {
 	if err := service.LoadCountryState(cfg.CountryStatePath); err != nil {
 		log.Printf("[country-state] unavailable; continuing without persisted evidence")
 	}
+	if err := service.LoadCached(cfg.CacheStatePath); err != nil {
+		log.Printf("[subscription-cache] unavailable; refreshing before publish")
+	} else if _, ok := service.Cached(); ok {
+		log.Printf("[subscription-cache] restored last-known-good subscription")
+	}
 
 	// Set Xray asset directory
 	os.Setenv("XRAY_LOCATION_ASSET", cfg.GeoDatDir)
@@ -108,6 +113,11 @@ func refreshSubscriptions() {
 	defer cancel()
 
 	result := service.Refresh(ctx)
+	if result.Published {
+		if err := service.SaveCached(cfg.CacheStatePath); err != nil {
+			log.Printf("[subscription-cache] save failed")
+		}
+	}
 	log.Printf("[refresh] done in %s: parsed=%d resolved=%d good=%d partial=%d dead=%d bandwidth=%d/%d country_direct=%v country_warp=%v country_state_save_failed=%t published=%t", time.Since(start), result.Parsed, result.Resolved, result.Good, result.Partial, result.Dead, result.BandwidthSuccesses, result.BandwidthCandidates, result.DirectCountrySources, result.WarpCountrySources, result.CountryStateSaveFailed, result.Published)
 }
 

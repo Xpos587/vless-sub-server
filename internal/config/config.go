@@ -28,6 +28,7 @@ type Config struct {
 	BandwidthRetryAfter    time.Duration `env:"BANDWIDTH_RETRY_AFTER" envDefault:"30m"`
 	SourceStaleMaxAge      time.Duration `env:"SOURCE_STALE_MAX_AGE" envDefault:"6h"`
 	CountryStatePath       string        `env:"COUNTRY_STATE_PATH"`
+	CacheStatePath         string        `env:"CACHE_STATE_PATH"`
 	CountryReprobeInterval time.Duration `env:"COUNTRY_REPROBE_INTERVAL" envDefault:"5m"`
 	ExitObserverURL        string        `env:"EXIT_OBSERVER_URL" envDefault:"https://exit-observer.hypcat.net/_exit"`
 	MaxConcurrent          int           `env:"MAX_CONCURRENT" envDefault:"50"`
@@ -110,6 +111,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("COUNTRY_REPROBE_INTERVAL must be positive")
 	}
 	c.CountryStatePath = os.Getenv("COUNTRY_STATE_PATH")
+	c.CacheStatePath = os.Getenv("CACHE_STATE_PATH")
 	if value := os.Getenv("EXIT_OBSERVER_URL"); value != "" {
 		c.ExitObserverURL = value
 	}
