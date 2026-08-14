@@ -562,17 +562,8 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 		t.Errorf("first rule should be block, got %v", blockRule["outboundTag"])
 	}
 	domains := blockRule["domain"].([]any)
-	hasAds := false
-	for _, d := range domains {
-		if d == "geosite:category-ads" {
-			hasAds = true
-		}
-	}
-	if !hasAds {
-		t.Error("block rule should contain geosite:category-ads")
-	}
-	if hasDomain(domains, "domain:calls.okcdn.ru") {
-		t.Fatal("calls.okcdn.ru must not be blocked")
+	if len(domains) != 1 || domains[0] != "geosite:category-ads" {
+		t.Fatalf("block rule must contain only category-ads, got %v", domains)
 	}
 
 	// The Xray field-rule schema has no domain_suffix property. All direct
@@ -580,11 +571,19 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 	directRule := rules[1].(map[string]any)
 	domains = directRule["domain"].([]any)
 	for _, want := range []string{
-		"geosite:category-ru",
 		"geosite:private",
+		"geosite:vk",
+		"geosite:mailru",
+		"geosite:yandex",
+		"geosite:category-ru",
+		"geosite:category-gov-ru",
 		"domain:kontur.host",
 		"domain:kg",
+		"domain:by",
 		"domain:cardlink.link",
+		"regexp:^([\\w\\-\\.]+\\.)ru$",
+		"regexp:^([\\w\\-\\.]+\\.)xn--p1ai$",
+		"regexp:^([\\w\\-\\.]+\\.)moscow$",
 	} {
 		if !hasDomain(domains, want) {
 			t.Errorf("direct rule missing %q: %v", want, domains)
@@ -621,7 +620,7 @@ func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing
 		t.Fatalf("routing rules = %d, want 4", len(rules))
 	}
 	block := rules[0].(map[string]any)
-	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "domain:oneme.ru") {
+	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "geosite:category-ads") || len(block["domain"].([]any)) != 1 {
 		t.Fatalf("block rule = %#v", block)
 	}
 	direct := rules[1].(map[string]any)
