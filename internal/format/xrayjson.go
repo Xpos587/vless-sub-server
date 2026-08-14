@@ -512,6 +512,7 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 				},
 				"ip": []string{
 					"geoip:private",
+					"geoip:ru",
 				},
 			},
 		)

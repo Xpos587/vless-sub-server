@@ -625,6 +625,11 @@ func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing
 	if direct["outboundTag"] != "direct" || !hasDomain(direct["domain"].([]any), "domain:kg") {
 		t.Fatalf("direct rule = %#v", direct)
 	}
+	for _, want := range []string{"geoip:private", "geoip:ru"} {
+		if !hasDomain(direct["ip"].([]any), want) {
+			t.Fatalf("direct IP rule missing %q: %#v", want, direct)
+		}
+	}
 }
 
 func hasDomain(values []any, want string) bool {
