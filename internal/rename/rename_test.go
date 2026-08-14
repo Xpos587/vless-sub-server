@@ -1,6 +1,7 @@
 package rename
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/michael/vless-sub-server/internal/geo"
@@ -31,6 +32,27 @@ func TestRenameAllUsesObservedExitGeoForSharedCredentialGateway(t *testing.T) {
 	for i := range want {
 		if got[i].RenamedFragment != want[i] {
 			t.Fatalf("entry %d name = %q, want %q", i, got[i].RenamedFragment, want[i])
+		}
+	}
+}
+
+func TestRenameAllDistinguishesDifferentFinalIPsInOneCity(t *testing.T) {
+	records := []struct {
+		Record parse.ProxyRecord
+		Geo    *geo.GeoInfo
+		IsLAN  bool
+	}{
+		{Record: parse.ProxyRecord{Host: "one.example"}, Geo: &geo.GeoInfo{CountryCode: "FI", City: "Helsinki", ISP: "Cloudflare Warp", IP: "198.51.100.1"}},
+		{Record: parse.ProxyRecord{Host: "two.example"}, Geo: &geo.GeoInfo{CountryCode: "FI", City: "Helsinki", ISP: "Cloudflare Warp", IP: "198.51.100.2"}},
+	}
+
+	got := RenameAll(records)
+	if got[0].RenamedFragment == got[1].RenamedFragment {
+		t.Fatalf("different final IPs received the same name: %#v", got)
+	}
+	for _, entry := range got {
+		if strings.Contains(entry.RenamedFragment, " (2)") || !strings.Contains(entry.RenamedFragment, " · ") {
+			t.Fatalf("final exit was not identified in %q", entry.RenamedFragment)
 		}
 	}
 }
