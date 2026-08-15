@@ -486,6 +486,16 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 				"outboundTag": "block",
 				"domain": []string{
 					"geosite:category-ads",
+					"domain:2ip.ru",
+					"domain:ipv4-internet.yandex.net",
+					"domain:ipv6-internet.yandex.net",
+					"domain:ifconfig.me",
+					"domain:api.ipify.org",
+					"domain:checkip.amazonaws.com",
+					"domain:ip.mail.ru",
+					"domain:api.sypexgeo.net",
+					"domain:api-ipv4.ip.sb",
+					"domain:api-ipv6.ip.sb",
 				},
 			},
 			map[string]any{

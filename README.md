@@ -100,8 +100,8 @@ Traffic flow: inbound → routing catch-all rule sends to `warp-out-N` → WARP 
 `?format=json&warp=off` omits the WireGuard outbound and routes the catch-all
 directly to `proxy-N`.
 
-`?format=json&profile=ru` uses the Russian bypass profile: ads and selected
-connectivity endpoints are blocked; `geosite:category-ru`, private networks,
+`?format=json&profile=ru` uses the Russian bypass profile: ads and known
+public IP/GeoIP checker endpoints are blocked; `geosite:category-ru`, private networks,
 and the explicitly listed local domains go direct; everything else follows the
 selected proxy chain. `profile=none` omits those policy rules entirely.
 

@@ -562,8 +562,26 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 		t.Errorf("first rule should be block, got %v", blockRule["outboundTag"])
 	}
 	domains := blockRule["domain"].([]any)
-	if len(domains) != 1 || domains[0] != "geosite:category-ads" {
-		t.Fatalf("block rule must contain only category-ads, got %v", domains)
+	wantBlocked := []string{
+		"geosite:category-ads",
+		"domain:2ip.ru",
+		"domain:ipv4-internet.yandex.net",
+		"domain:ipv6-internet.yandex.net",
+		"domain:ifconfig.me",
+		"domain:api.ipify.org",
+		"domain:checkip.amazonaws.com",
+		"domain:ip.mail.ru",
+		"domain:api.sypexgeo.net",
+		"domain:api-ipv4.ip.sb",
+		"domain:api-ipv6.ip.sb",
+	}
+	if len(domains) != len(wantBlocked) {
+		t.Fatalf("block rule domains = %v, want %v", domains, wantBlocked)
+	}
+	for i, want := range wantBlocked {
+		if domains[i] != want {
+			t.Fatalf("blocked domain %d = %v, want %v", i, domains[i], want)
+		}
 	}
 
 	// The Xray field-rule schema has no domain_suffix property. All direct
@@ -620,7 +638,7 @@ func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing
 		t.Fatalf("routing rules = %d, want 4", len(rules))
 	}
 	block := rules[0].(map[string]any)
-	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "geosite:category-ads") || len(block["domain"].([]any)) != 1 {
+	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "geosite:category-ads") || !hasDomain(block["domain"].([]any), "domain:api.sypexgeo.net") {
 		t.Fatalf("block rule = %#v", block)
 	}
 	direct := rules[1].(map[string]any)
