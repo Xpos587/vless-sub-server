@@ -53,13 +53,43 @@ func FormatXrayJSONWithOptions(entries []rename.RenamedEntry, meta FormatMetadat
 			"inbounds":  buildInbounds(i + 1),
 			"outbounds": buildPerProxyOutbounds(ob, i+1, options.Warp),
 			"routing":   buildRoutingRules(i+1, options.Warp, options.Profile),
-			"dns":       map[string]any{},
+			"dns":       buildDNSConfig(options.Profile),
 		}
 		configs = append(configs, config)
 	}
 
 	result, _ := json.MarshalIndent(configs, "", "  ")
 	return result
+}
+
+func buildDNSConfig(profile RoutingProfile) map[string]any {
+	hosts := map[string][]string{
+		"cloudflare-dns.com": {"1.1.1.1", "1.0.0.1"},
+		"dns.google":         {"8.8.8.8", "8.8.4.4"},
+	}
+	servers := []any{
+		"https://cloudflare-dns.com/dns-query",
+		"https://dns.google/dns-query",
+	}
+	if profile != RoutingProfileNone {
+		hosts["common.dot.dns.yandex.net"] = []string{"77.88.8.8", "77.88.8.1"}
+		servers = []any{
+			map[string]any{
+				"address":       "https://common.dot.dns.yandex.net/dns-query",
+				"domains":       []string{"geosite:category-ru", "geosite:category-gov-ru", "geosite:ozon", "geosite:wildberries"},
+				"skipFallback":  true,
+				"queryStrategy": "UseIPv4",
+			},
+			"https://cloudflare-dns.com/dns-query",
+			"https://dns.google/dns-query",
+		}
+	}
+	return map[string]any{
+		"hosts":         hosts,
+		"servers":       servers,
+		"queryStrategy": "UseIPv4",
+		"tag":           "dns-query",
+	}
 }
 
 // buildInbounds creates socks and http inbounds with fixed ports.
@@ -479,6 +509,11 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 		catchAllTag = fmt.Sprintf("warp-out-%d", index)
 	}
 	rules := []any{}
+	rules = append(rules, map[string]any{
+		"type":        "field",
+		"inboundTag":  []string{"dns-query"},
+		"outboundTag": catchAllTag,
+	})
 	if profile != RoutingProfileNone {
 		rules = append(rules,
 			map[string]any{
@@ -486,16 +521,7 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 				"outboundTag": "block",
 				"domain": []string{
 					"geosite:category-ads",
-					"domain:2ip.ru",
-					"domain:ipv4-internet.yandex.net",
-					"domain:ipv6-internet.yandex.net",
-					"domain:ifconfig.me",
-					"domain:api.ipify.org",
-					"domain:checkip.amazonaws.com",
-					"domain:ip.mail.ru",
-					"domain:api.sypexgeo.net",
-					"domain:api-ipv4.ip.sb",
-					"domain:api-ipv6.ip.sb",
+					"geosite:category-ip-geo-detect",
 				},
 			},
 			map[string]any{
@@ -512,6 +538,8 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 					"domain:kg",
 					"domain:by",
 					"domain:cardlink.link",
+					"geosite:ozon",
+					"geosite:wildberries",
 					"regexp:^([\\w\\-\\.]+\\.)loc$",
 					"regexp:^([\\w\\-\\.]+\\.)local$",
 					"regexp:^([\\w\\-\\.]+\\.)ru$",

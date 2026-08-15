@@ -124,16 +124,48 @@ func TestFormatXrayJSON_VLESS_Reality(t *testing.T) {
 		t.Errorf("expected domainStrategy IPIfNonMatch, got %v", routing["domainStrategy"])
 	}
 	rules := routing["rules"].([]any)
-	if len(rules) != 4 {
-		t.Fatalf("expected 4 routing rules (block+domain direct+IP direct+catch-all warp), got %d", len(rules))
+	if len(rules) != 5 {
+		t.Fatalf("expected 5 routing rules (DNS+block+domain direct+IP direct+catch-all warp), got %d", len(rules))
+	}
+	dnsRoute := rules[0].(map[string]any)
+	if dnsRoute["outboundTag"] != "warp-out-1" {
+		t.Fatalf("expected DNS route to use warp-out-1, got %#v", dnsRoute)
+	}
+	if !hasDomain(dnsRoute["inboundTag"].([]any), "dns-query") {
+		t.Fatalf("expected DNS route inbound tag, got %#v", dnsRoute)
 	}
 	// Check catch-all WARP rule (last rule)
-	catchAll := rules[3].(map[string]any)
+	catchAll := rules[4].(map[string]any)
 	if catchAll["outboundTag"] != "warp-out-1" {
 		t.Errorf("expected catch-all rule to route to warp-out-1, got %v", catchAll["outboundTag"])
 	}
 	if catchAll["port"] != "0-65535" {
 		t.Errorf("expected catch-all port 0-65535, got %v", catchAll["port"])
+	}
+
+	dns := config["dns"].(map[string]any)
+	if dns["queryStrategy"] != "UseIPv4" || dns["tag"] != "dns-query" {
+		t.Fatalf("unexpected DNS policy: %#v", dns)
+	}
+	servers := dns["servers"].([]any)
+	if len(servers) != 3 {
+		t.Fatalf("unexpected DoH servers: %#v", servers)
+	}
+	ruDNS := servers[0].(map[string]any)
+	if ruDNS["address"] != "https://common.dot.dns.yandex.net/dns-query" || ruDNS["skipFallback"] != true || ruDNS["queryStrategy"] != "UseIPv4" {
+		t.Fatalf("unexpected Russia DNS server: %#v", ruDNS)
+	}
+	for _, want := range []string{"geosite:category-ru", "geosite:category-gov-ru", "geosite:ozon", "geosite:wildberries"} {
+		if !hasDomain(ruDNS["domains"].([]any), want) {
+			t.Fatalf("Russia DNS server missing domain %q: %#v", want, ruDNS)
+		}
+	}
+	if servers[1] != "https://cloudflare-dns.com/dns-query" || servers[2] != "https://dns.google/dns-query" {
+		t.Fatalf("unexpected fallback DoH servers: %#v", servers)
+	}
+	hosts := dns["hosts"].(map[string]any)
+	if !hasDomain(hosts["common.dot.dns.yandex.net"].([]any), "77.88.8.8") || !hasDomain(hosts["common.dot.dns.yandex.net"].([]any), "77.88.8.1") {
+		t.Fatalf("Yandex DoH hosts = %#v", hosts)
 	}
 }
 
@@ -557,23 +589,14 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 	rules := config["routing"].(map[string]any)["rules"].([]any)
 
 	// Rule 0: block
-	blockRule := rules[0].(map[string]any)
+	blockRule := rules[1].(map[string]any)
 	if blockRule["outboundTag"] != "block" {
 		t.Errorf("first rule should be block, got %v", blockRule["outboundTag"])
 	}
 	domains := blockRule["domain"].([]any)
 	wantBlocked := []string{
 		"geosite:category-ads",
-		"domain:2ip.ru",
-		"domain:ipv4-internet.yandex.net",
-		"domain:ipv6-internet.yandex.net",
-		"domain:ifconfig.me",
-		"domain:api.ipify.org",
-		"domain:checkip.amazonaws.com",
-		"domain:ip.mail.ru",
-		"domain:api.sypexgeo.net",
-		"domain:api-ipv4.ip.sb",
-		"domain:api-ipv6.ip.sb",
+		"geosite:category-ip-geo-detect",
 	}
 	if len(domains) != len(wantBlocked) {
 		t.Fatalf("block rule domains = %v, want %v", domains, wantBlocked)
@@ -586,7 +609,7 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 
 	// The Xray field-rule schema has no domain_suffix property. All direct
 	// domains, including the .kg matcher, must be expressed in domain.
-	directRule := rules[1].(map[string]any)
+	directRule := rules[2].(map[string]any)
 	domains = directRule["domain"].([]any)
 	for _, want := range []string{
 		"geosite:private",
@@ -599,6 +622,8 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 		"domain:kg",
 		"domain:by",
 		"domain:cardlink.link",
+		"geosite:ozon",
+		"geosite:wildberries",
 		"regexp:^([\\w\\-\\.]+\\.)ru$",
 		"regexp:^([\\w\\-\\.]+\\.)xn--p1ai$",
 		"regexp:^([\\w\\-\\.]+\\.)moscow$",
@@ -619,11 +644,16 @@ func TestFormatXrayJSONWithOptionsNeutralProfileOmitsRussiaRules(t *testing.T) {
 	}}
 	config := parseSingleConfig(t, FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: false, Profile: RoutingProfileNone}))
 	rules := config["routing"].(map[string]any)["rules"].([]any)
-	if len(rules) != 1 {
-		t.Fatalf("routing rules = %d, want only catch-all", len(rules))
+	if len(rules) != 2 {
+		t.Fatalf("routing rules = %d, want DNS and catch-all", len(rules))
 	}
-	if rules[0].(map[string]any)["outboundTag"] != "proxy-1" {
-		t.Fatalf("catch-all = %#v", rules[0])
+	if rules[1].(map[string]any)["outboundTag"] != "proxy-1" {
+		t.Fatalf("catch-all = %#v", rules[1])
+	}
+	dns := config["dns"].(map[string]any)
+	servers := dns["servers"].([]any)
+	if len(servers) != 2 || servers[0] != "https://cloudflare-dns.com/dns-query" || servers[1] != "https://dns.google/dns-query" {
+		t.Fatalf("neutral profile DNS = %#v", dns)
 	}
 }
 
@@ -634,21 +664,21 @@ func TestFormatXrayJSONWithOptionsRussiaProfileIncludesRequestedRules(t *testing
 	}}
 	config := parseSingleConfig(t, FormatXrayJSONWithOptions(entries, FormatMetadata{}, XrayJSONOptions{Warp: false, Profile: RoutingProfileRussia}))
 	rules := config["routing"].(map[string]any)["rules"].([]any)
-	if len(rules) != 4 {
-		t.Fatalf("routing rules = %d, want 4", len(rules))
+	if len(rules) != 5 {
+		t.Fatalf("routing rules = %d, want 5", len(rules))
 	}
-	block := rules[0].(map[string]any)
-	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "geosite:category-ads") || !hasDomain(block["domain"].([]any), "domain:api.sypexgeo.net") {
+	block := rules[1].(map[string]any)
+	if block["outboundTag"] != "block" || !hasDomain(block["domain"].([]any), "geosite:category-ads") || !hasDomain(block["domain"].([]any), "geosite:category-ip-geo-detect") {
 		t.Fatalf("block rule = %#v", block)
 	}
-	direct := rules[1].(map[string]any)
+	direct := rules[2].(map[string]any)
 	if direct["outboundTag"] != "direct" || !hasDomain(direct["domain"].([]any), "domain:kg") {
 		t.Fatalf("direct rule = %#v", direct)
 	}
 	if _, exists := direct["ip"]; exists {
 		t.Fatalf("domain direct rule must not combine IP matching: %#v", direct)
 	}
-	ipDirect := rules[2].(map[string]any)
+	ipDirect := rules[3].(map[string]any)
 	if ipDirect["outboundTag"] != "direct" {
 		t.Fatalf("IP direct rule = %#v", ipDirect)
 	}
