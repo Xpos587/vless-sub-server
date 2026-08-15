@@ -194,15 +194,23 @@ func TestRenderWarpOffJSONContainsNoWireguard(t *testing.T) {
 	}
 }
 
-func TestRenderUsesPrecomputedDefaultBodies(t *testing.T) {
+func TestRenderUsesPrecomputedURLButRegeneratesJSON(t *testing.T) {
 	data := sampleCache()
 	data.Output = "precomputed-url"
 	data.JSONOutput = []byte(`[{"precomputed":true}]`)
 	if got := Render(data, Options{Format: FormatURL, Warp: false}); string(got.Body) != data.Output {
 		t.Fatalf("URL body = %q", got.Body)
 	}
-	if got := Render(data, Options{Format: FormatJSON, Warp: true}); string(got.Body) != string(data.JSONOutput) {
-		t.Fatalf("JSON body = %q", got.Body)
+	got := Render(data, Options{Format: FormatJSON, Warp: true})
+	if string(got.Body) == string(data.JSONOutput) || contains(string(got.Body), `"precomputed"`) {
+		t.Fatalf("JSON body reused stale cache: %s", got.Body)
+	}
+	var configs []map[string]any
+	if err := json.Unmarshal(got.Body, &configs); err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) == 0 || configs[0]["dns"] == nil {
+		t.Fatalf("regenerated JSON has no DNS config: %#v", configs)
 	}
 }
 

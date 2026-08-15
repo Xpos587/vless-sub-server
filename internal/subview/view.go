@@ -123,9 +123,6 @@ func Render(data *pipeline.CachedData, options Options) Response {
 		if options.Format == FormatURL && !options.Warp && data.Output != "" {
 			return Response{Body: []byte(data.Output), EntryCount: len(data.Entries)}
 		}
-		if options.Format == FormatJSON && options.Warp && len(data.JSONOutput) > 0 {
-			return Response{Body: append([]byte(nil), data.JSONOutput...), EntryCount: len(data.Entries)}
-		}
 	}
 	entries := make([]rename.RenamedEntry, 0, len(data.Entries))
 	response := Response{}

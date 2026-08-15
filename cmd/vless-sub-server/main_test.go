@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,20 +47,18 @@ func TestWriteSubscriptionResponseSetsCountryDiagnostics(t *testing.T) {
 	}
 }
 
-func TestWriteSubscriptionResponsePreservesDefaultFastPath(t *testing.T) {
+func TestWriteSubscriptionResponsePreservesURLFastPath(t *testing.T) {
 	data := handlerCache()
-	for _, test := range []struct {
-		url  string
-		body string
-	}{
-		{url: "/sub", body: data.Output},
-		{url: "/sub?format=json", body: string(data.JSONOutput)},
-	} {
-		recorder := httptest.NewRecorder()
-		writeSubscriptionResponse(recorder, httptest.NewRequest(http.MethodGet, test.url, nil), data)
-		if recorder.Body.String() != test.body {
-			t.Fatalf("%s body changed: %q", test.url, recorder.Body.String())
-		}
+	recorder := httptest.NewRecorder()
+	writeSubscriptionResponse(recorder, httptest.NewRequest(http.MethodGet, "/sub", nil), data)
+	if recorder.Body.String() != data.Output {
+		t.Fatalf("URL body changed: %q", recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	writeSubscriptionResponse(recorder, httptest.NewRequest(http.MethodGet, "/sub?format=json", nil), data)
+	if recorder.Body.String() == string(data.JSONOutput) || !strings.Contains(recorder.Body.String(), `"dns"`) {
+		t.Fatalf("JSON body reused stale cache: %q", recorder.Body.String())
 	}
 }
 
