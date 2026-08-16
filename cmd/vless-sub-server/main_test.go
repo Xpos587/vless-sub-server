@@ -62,6 +62,28 @@ func TestWriteSubscriptionResponsePreservesURLFastPath(t *testing.T) {
 	}
 }
 
+func TestWriteSubscriptionResponseSingbox(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/sub?format=singbox", nil)
+	writeSubscriptionResponse(recorder, request, handlerCache())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("content type = %q", got)
+	}
+	if got := recorder.Header().Get("X-Profile"); got != "ru" {
+		t.Fatalf("X-Profile = %q", got)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &config); err != nil {
+		t.Fatalf("singbox body must be one JSON object: %v", err)
+	}
+	if config["outbounds"] == nil || config["route"] == nil || config["dns"] == nil {
+		t.Fatalf("singbox config incomplete: %#v", config)
+	}
+}
+
 func TestWriteSubscriptionResponseKeepsRootURLDirectForFullConfigClients(t *testing.T) {
 	for name, headers := range map[string]map[string]string{
 		"v2rayNG": {"User-Agent": "v2rayNG/2.2.6"},

@@ -189,7 +189,7 @@ func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pip
 	}
 	response := subview.Render(data, options)
 	contentType := "text/plain; charset=utf-8"
-	if options.Format == subview.FormatJSON {
+	if options.Format != subview.FormatURL {
 		contentType = "application/json; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -198,7 +198,7 @@ func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pip
 	w.Header().Set("X-Last-Refresh", data.LastRefresh.Format(time.RFC3339))
 	w.Header().Set("X-Warp", map[bool]string{true: "on", false: "off"}[options.Warp])
 	profile := "none"
-	if options.Format == subview.FormatJSON {
+	if options.Format != subview.FormatURL {
 		profile = string(options.Profile)
 	}
 	w.Header().Set("X-Profile", profile)

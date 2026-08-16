@@ -16,8 +16,9 @@ type Format string
 type Client string
 
 const (
-	FormatURL  Format = "url"
-	FormatJSON Format = "json"
+	FormatURL     Format = "url"
+	FormatJSON    Format = "json"
+	FormatSingbox Format = "singbox"
 
 	ClientUnknown Client = "unknown"
 	ClientV2rayNG Client = "v2rayng"
@@ -53,12 +54,14 @@ func ParseForClient(values url.Values, client Client) (Options, error) {
 	if value := values.Get("format"); value != "" {
 		options.Format = Format(value)
 	}
-	if options.Format != FormatURL && options.Format != FormatJSON {
+	if options.Format != FormatURL && options.Format != FormatJSON && options.Format != FormatSingbox {
 		return Options{}, fmt.Errorf("unsupported format %q", options.Format)
 	}
 
-	options.Warp = options.Format == FormatJSON
-	if client == ClientExclave || client == ClientHusi {
+	options.Warp = options.Format == FormatJSON || options.Format == FormatSingbox
+	// Flattening clients break the Xray proxy -> WARP chain. sing-box keeps it
+	// via outbound detour, so only the Xray JSON format needs the exception.
+	if options.Format != FormatSingbox && (client == ClientExclave || client == ClientHusi) {
 		options.Warp = false
 	}
 	if value := values.Get("warp"); value != "" {
@@ -74,7 +77,7 @@ func ParseForClient(values url.Values, client Client) (Options, error) {
 			return Options{}, fmt.Errorf("unsupported warp mode %q", value)
 		}
 	}
-	if options.Warp && options.Format != FormatJSON {
+	if options.Warp && options.Format == FormatURL {
 		return Options{}, fmt.Errorf("warp=on requires format=json")
 	}
 	if value := values.Get("profile"); value != "" {
@@ -86,7 +89,7 @@ func ParseForClient(values url.Values, client Client) (Options, error) {
 		default:
 			return Options{}, fmt.Errorf("unsupported profile %q", value)
 		}
-		if options.Format != FormatJSON {
+		if options.Format == FormatURL {
 			return Options{}, fmt.Errorf("profile=%s requires format=json", value)
 		}
 	}
@@ -146,8 +149,12 @@ func Render(data *pipeline.CachedData, options Options) Response {
 	response.EntryCount = len(entries)
 	meta := data.Metadata
 	meta.TotalAlive = len(entries)
-	if options.Format == FormatJSON {
+	switch options.Format {
+	case FormatJSON:
 		response.Body = format.FormatXrayJSONWithOptions(entries, meta, format.XrayJSONOptions{Warp: options.Warp, Profile: options.Profile})
+		return response
+	case FormatSingbox:
+		response.Body = format.FormatSingboxJSONWithOptions(entries, meta, format.SingboxOptions{Warp: options.Warp, Profile: options.Profile})
 		return response
 	}
 	response.Body = []byte(format.FormatOutput(entries, meta))

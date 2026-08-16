@@ -115,6 +115,65 @@ func TestParseRejectsUnknownProfile(t *testing.T) {
 	}
 }
 
+func TestParseSingboxFormatDefaults(t *testing.T) {
+	options, err := Parse(url.Values{"format": {"singbox"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Format != FormatSingbox || !options.Warp || options.Profile != format.RoutingProfileRussia {
+		t.Fatalf("singbox defaults = %#v", options)
+	}
+}
+
+func TestParseSingboxAllowsProfileNone(t *testing.T) {
+	options, err := Parse(url.Values{"format": {"singbox"}, "profile": {"none"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Profile != format.RoutingProfileNone {
+		t.Fatalf("profile = %q, want none", options.Profile)
+	}
+}
+
+func TestParseSingboxKeepsWarpForFlatteningClients(t *testing.T) {
+	for _, client := range []Client{ClientExclave, ClientHusi} {
+		options, err := ParseForClient(url.Values{"format": {"singbox"}}, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !options.Warp {
+			t.Fatalf("%s must keep warp for singbox (detour works): %#v", client, options)
+		}
+	}
+}
+
+func TestParseSingboxWarpOff(t *testing.T) {
+	options, err := Parse(url.Values{"format": {"singbox"}, "warp": {"off"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Warp {
+		t.Fatalf("warp=off ignored: %#v", options)
+	}
+}
+
+func TestRenderSingboxProducesSingleConfig(t *testing.T) {
+	data := sampleCache()
+	response := Render(data, Options{Format: FormatSingbox, Warp: true, Profile: format.RoutingProfileRussia})
+	var config map[string]any
+	if err := json.Unmarshal(response.Body, &config); err != nil {
+		t.Fatalf("singbox body must be a single JSON object: %v", err)
+	}
+	for _, key := range []string{"outbounds", "route", "dns", "inbounds"} {
+		if config[key] == nil {
+			t.Fatalf("singbox config missing %s: %#v", key, config)
+		}
+	}
+	if response.EntryCount == 0 {
+		t.Fatalf("singbox response lost entries: %#v", response)
+	}
+}
+
 func TestParseValidatesWarpAndFormat(t *testing.T) {
 	for name, values := range map[string]url.Values{
 		"warp":   {"warp": {"sometimes"}},
