@@ -67,7 +67,7 @@ func ParseForClient(values url.Values, client Client) (Options, error) {
 	if value := values.Get("warp"); value != "" {
 		switch value {
 		case "on":
-			if client == ClientExclave || client == ClientHusi {
+			if options.Format != FormatSingbox && (client == ClientExclave || client == ClientHusi) {
 				return Options{}, fmt.Errorf("warp=on is unsupported by %s subscription import", client)
 			}
 			options.Warp = true

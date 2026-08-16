@@ -147,6 +147,18 @@ func TestParseSingboxKeepsWarpForFlatteningClients(t *testing.T) {
 	}
 }
 
+func TestParseSingboxExplicitWarpOnForFlatteningClients(t *testing.T) {
+	for _, client := range []Client{ClientExclave, ClientHusi} {
+		options, err := ParseForClient(url.Values{"format": {"singbox"}, "warp": {"on"}}, client)
+		if err != nil {
+			t.Fatalf("%s rejected explicit warp=on for singbox: %v", client, err)
+		}
+		if !options.Warp {
+			t.Fatalf("%s warp lost: %#v", client, options)
+		}
+	}
+}
+
 func TestParseSingboxWarpOff(t *testing.T) {
 	options, err := Parse(url.Values{"format": {"singbox"}, "warp": {"off"}})
 	if err != nil {
