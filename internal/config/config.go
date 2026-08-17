@@ -38,6 +38,7 @@ type Config struct {
 	Hwid                   string        `env:"HWID,required"`
 	SourceAliases          []string      `env:"SOURCE_ALIASES" envSeparator:","`
 	MetricsPort            int           `env:"METRICS_PORT" envDefault:"9090"`
+	FetchProxyFallback     bool          `env:"FETCH_PROXY_FALLBACK" envDefault:"true"`
 }
 
 func Load() (*Config, error) {
@@ -135,6 +136,13 @@ func Load() (*Config, error) {
 		if c.BandwidthEnabled, err = strconv.ParseBool(raw); err != nil {
 			return nil, fmt.Errorf("BANDWIDTH_ENABLED: %w", err)
 		}
+	}
+	if raw := os.Getenv("FETCH_PROXY_FALLBACK"); raw != "" {
+		if c.FetchProxyFallback, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("FETCH_PROXY_FALLBACK: %w", err)
+		}
+	} else {
+		c.FetchProxyFallback = true
 	}
 	if value := os.Getenv("GEO_DAT_DIR"); value != "" {
 		c.GeoDatDir = value

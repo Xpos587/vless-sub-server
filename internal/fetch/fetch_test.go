@@ -15,7 +15,7 @@ import (
 func TestFetchSingleClassifiesEmptySuccessfulResponseAsOK(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
-	result := fetchSingle(context.Background(), server.URL, time.Second)
+	result := fetchSingle(context.Background(), server.URL, time.Second, fetchTransport, "")
 	if result.Status != "ok" || len(result.Lines) != 0 {
 		t.Fatalf("result = %#v, want successful empty result", result)
 	}

@@ -23,10 +23,11 @@ func NewSourceCache() *SourceCache {
 // MergedSource keeps per-source lines after applying the stale-cache policy,
 // so metrics can attribute configs to the subscription that served them.
 type MergedSource struct {
-	URL     string
-	Lines   []string
-	FetchOK bool
-	Stale   bool
+	URL      string
+	Lines    []string
+	FetchOK  bool
+	Stale    bool
+	ViaProxy bool
 }
 
 func (c *SourceCache) Merge(now time.Time, results []FetchResult, maxAge time.Duration) []string {
@@ -51,7 +52,7 @@ func (c *SourceCache) MergeDetailed(now time.Time, results []FetchResult, maxAge
 			}
 			copyLines := append([]string(nil), result.Lines...)
 			c.snapshots[result.URL] = sourceSnapshot{lines: copyLines, lastSuccess: now}
-			merged = append(merged, MergedSource{URL: result.URL, Lines: copyLines, FetchOK: true})
+			merged = append(merged, MergedSource{URL: result.URL, Lines: copyLines, FetchOK: true, ViaProxy: result.Via == "proxy"})
 			continue
 		}
 		if isAuthoritativeFailure(result.Error) {

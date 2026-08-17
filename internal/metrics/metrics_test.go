@@ -13,6 +13,7 @@ func TestSnapshotRender(t *testing.T) {
 			{
 				Alias:          "volnalink",
 				FetchOK:        true,
+				ViaProxy:       true,
 				Lines:          120,
 				Parsed:         110,
 				Skipped:        10,
@@ -36,6 +37,7 @@ func TestSnapshotRender(t *testing.T) {
 	out := string(snapshot.Render())
 	for _, want := range []string{
 		`vlesssub_source_fetch_ok{source="volnalink"} 1`,
+		`vlesssub_source_fetch_via_proxy{source="volnalink"} 1`,
 		`vlesssub_source_stale{source="volnalink"} 0`,
 		`vlesssub_source_lines{source="volnalink"} 120`,
 		`vlesssub_source_parsed{source="volnalink"} 110`,

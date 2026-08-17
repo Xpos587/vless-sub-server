@@ -23,6 +23,7 @@ func (p *Pipeline) buildMetricsSnapshot(at time.Time, attributions []SourceAttri
 			Alias:          p.cfg.SourceAlias(i),
 			FetchOK:        attr.FetchOK,
 			Stale:          attr.Stale,
+			ViaProxy:       attr.ViaProxy,
 			Lines:          attr.Lines,
 			Parsed:         attr.Parsed,
 			Skipped:        attr.Skipped,

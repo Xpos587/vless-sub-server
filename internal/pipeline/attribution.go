@@ -10,6 +10,7 @@ type SourceAttribution struct {
 	URL        string
 	FetchOK    bool
 	Stale      bool
+	ViaProxy   bool
 	Lines      int
 	Parsed     int
 	Skipped    int
@@ -26,7 +27,7 @@ func AttributeSources(merged []fetch.MergedSource) ([]SourceAttribution, map[str
 	seen := map[string]bool{}
 
 	for i, src := range merged {
-		attr := SourceAttribution{URL: src.URL, FetchOK: src.FetchOK, Stale: src.Stale, Lines: len(src.Lines)}
+		attr := SourceAttribution{URL: src.URL, FetchOK: src.FetchOK, Stale: src.Stale, ViaProxy: src.ViaProxy, Lines: len(src.Lines)}
 		result := parse.ParseAllLines(src.Lines)
 		attr.Parsed = len(result.Records)
 		attr.Skipped = result.Skipped

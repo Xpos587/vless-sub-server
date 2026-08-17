@@ -29,9 +29,17 @@ type FetchResult struct {
 	Status string // "ok" or "error"
 	Lines  []string
 	Error  string
+	Via    string // "" = direct egress; "proxy" = fetched through the pool gateway
 }
 
 func FetchSubscriptions(ctx context.Context, urls []string, timeout time.Duration) []FetchResult {
+	return FetchSubscriptionsVia(ctx, urls, timeout, fetchTransport, "")
+}
+
+// FetchSubscriptionsVia fetches the URLs through the given transport, marking
+// results with via so attribution and metrics can tell direct fetches from
+// pool-gateway fallbacks.
+func FetchSubscriptionsVia(ctx context.Context, urls []string, timeout time.Duration, transport *http.Transport, via string) []FetchResult {
 	results := make([]FetchResult, len(urls))
 	g, _ := errgroup.WithContext(ctx)
 	g.SetLimit(len(urls)) // all URLs in parallel — typically 2-5
@@ -39,7 +47,7 @@ func FetchSubscriptions(ctx context.Context, urls []string, timeout time.Duratio
 	for i, u := range urls {
 		i, u := i, u
 		g.Go(func() error {
-			results[i] = fetchSingle(ctx, u, timeout)
+			results[i] = fetchSingle(ctx, u, timeout, transport, via)
 			return nil // best-effort: collect all results regardless
 		})
 	}
@@ -47,8 +55,8 @@ func FetchSubscriptions(ctx context.Context, urls []string, timeout time.Duratio
 	return results
 }
 
-func fetchSingle(ctx context.Context, url string, timeout time.Duration) FetchResult {
-	client := &http.Client{Timeout: timeout, Transport: fetchTransport}
+func fetchSingle(ctx context.Context, url string, timeout time.Duration, transport *http.Transport, via string) FetchResult {
+	client := &http.Client{Timeout: timeout, Transport: transport}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return FetchResult{URL: url, Status: "error", Error: "request setup"}
@@ -78,10 +86,10 @@ func fetchSingle(ctx context.Context, url string, timeout time.Duration) FetchRe
 	lines := decodeSubscription(string(body))
 	if len(lines) == 0 {
 		log.Printf("[fetch] successful empty response")
-		return FetchResult{URL: url, Status: "ok"}
+		return FetchResult{URL: url, Status: "ok", Via: via}
 	}
 	log.Printf("[fetch] ok, %d lines", len(lines))
-	return FetchResult{URL: url, Status: "ok", Lines: lines}
+	return FetchResult{URL: url, Status: "ok", Lines: lines, Via: via}
 }
 
 func decodeSubscription(raw string) []string {

@@ -124,6 +124,7 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	now := time.Now()
 	result := RefreshResult{DirectCountrySources: make(map[string]int), WarpCountrySources: make(map[string]int)}
 	fetched := fetch.FetchSubscriptions(ctx, p.cfg.SubscriptionURLs, 15*time.Second)
+	fetched = p.retryFailedFetchesViaPool(ctx, fetched)
 	merged := p.sourceCache.MergeDetailed(now, fetched, p.cfg.SourceStaleMaxAge)
 	attributions, owners := AttributeSources(merged)
 	var lines []string

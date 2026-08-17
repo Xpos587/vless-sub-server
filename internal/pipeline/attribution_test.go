@@ -19,7 +19,7 @@ func mustParseLine(t *testing.T, line string) *parse.ProxyRecord {
 func TestAttributeSourcesFirstSourceWins(t *testing.T) {
 	shared := "vless://uuid-a@shared.example.com:443?security=reality&sni=a.com#shared"
 	merged := []fetch.MergedSource{
-		{URL: "https://a.example/sub", FetchOK: true, Lines: []string{
+		{URL: "https://a.example/sub", FetchOK: true, ViaProxy: true, Lines: []string{
 			shared,
 			"vless://uuid-b@a1.example.com:443?security=reality&sni=a.com#a1",
 			"# comment",
@@ -41,7 +41,7 @@ func TestAttributeSourcesFirstSourceWins(t *testing.T) {
 	}
 
 	a := sources[0]
-	if !a.FetchOK || a.Lines != 4 || a.Parsed != 2 || a.Skipped != 2 || a.Duplicates != 0 || a.Unique != 2 {
+	if !a.FetchOK || !a.ViaProxy || a.Lines != 4 || a.Parsed != 2 || a.Skipped != 2 || a.Duplicates != 0 || a.Unique != 2 {
 		t.Fatalf("source a wrong: %+v", a)
 	}
 	b := sources[1]

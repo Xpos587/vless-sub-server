@@ -14,6 +14,7 @@ type SourceSeries struct {
 	Alias          string
 	FetchOK        bool
 	Stale          bool
+	ViaProxy       bool
 	Lines          int
 	Parsed         int
 	Skipped        int
@@ -38,6 +39,7 @@ func (s Snapshot) Render() []byte {
 		value func(SourceSeries) int
 	}{
 		{"vlesssub_source_fetch_ok", "Whether the latest fetch of this source succeeded.", func(s SourceSeries) int { return boolInt(s.FetchOK) }},
+		{"vlesssub_source_fetch_via_proxy", "Whether the source was fetched through the pool gateway after a direct failure.", func(s SourceSeries) int { return boolInt(s.ViaProxy) }},
 		{"vlesssub_source_stale", "Whether the source is currently served from the stale cache.", func(s SourceSeries) int { return boolInt(s.Stale) }},
 		{"vlesssub_source_lines", "Raw lines served by the source.", func(s SourceSeries) int { return s.Lines }},
 		{"vlesssub_source_parsed", "Configs parsed from the source.", func(s SourceSeries) int { return s.Parsed }},
