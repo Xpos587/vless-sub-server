@@ -103,6 +103,23 @@ func TestWriteSubscriptionResponseClash(t *testing.T) {
 	}
 }
 
+func TestNoindexMiddlewareAndRobotsTxt(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	noindex(handleHealth)(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if got := recorder.Header().Get("X-Robots-Tag"); !strings.Contains(got, "noindex") || !strings.Contains(got, "nofollow") {
+		t.Fatalf("X-Robots-Tag = %q", got)
+	}
+
+	recorder = httptest.NewRecorder()
+	handleRobots(recorder, httptest.NewRequest(http.MethodGet, "/robots.txt", nil))
+	if !strings.Contains(recorder.Body.String(), "Disallow: /") {
+		t.Fatalf("robots.txt = %q", recorder.Body.String())
+	}
+	if got := recorder.Header().Get("X-Robots-Tag"); !strings.Contains(got, "noindex") {
+		t.Fatalf("robots X-Robots-Tag = %q", got)
+	}
+}
+
 func TestWriteSubscriptionResponseKeepsRootURLDirectForFullConfigClients(t *testing.T) {
 	for name, headers := range map[string]map[string]string{
 		"v2rayNG": {"User-Agent": "v2rayNG/2.2.6"},

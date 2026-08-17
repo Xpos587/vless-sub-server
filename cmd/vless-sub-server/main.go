@@ -71,9 +71,10 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleSub)
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/_exit", handleExitObservation)
+	mux.HandleFunc("/", noindex(handleSub))
+	mux.HandleFunc("/robots.txt", handleRobots)
+	mux.HandleFunc("/health", noindex(handleHealth))
+	mux.HandleFunc("/_exit", noindex(handleExitObservation))
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
@@ -214,6 +215,22 @@ func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pip
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte("ok"))
+}
+
+// noindex marks every response as off-limits for crawlers; the subscription
+// endpoint is a private feed and must not appear in any search index.
+func noindex(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet, noimageindex")
+		next(w, r)
+	}
+}
+
+func handleRobots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write([]byte("User-agent: *\nDisallow: /\n"))
 }
 
 // handleExitObservation reports the proxy's source address observed at our
