@@ -3,11 +3,12 @@ package pipeline
 import (
 	"testing"
 
+	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/rename"
 )
 
-func fallbackEntry(host string, direct, warp bool) CachedEntry {
+func fallbackEntry(host, countryCode string, direct, warp bool) CachedEntry {
 	return CachedEntry{
 		Entry: rename.RenamedEntry{
 			Record: parse.ProxyRecord{
@@ -16,29 +17,39 @@ func fallbackEntry(host string, direct, warp bool) CachedEntry {
 			},
 			RenamedFragment: host,
 		},
+		Countries:     country.RouteCountries{DirectV4: country.FamilyResult{ObservedCountry: countryCode}},
 		DirectHealthy: direct,
 		WarpHealthy:   warp,
 	}
 }
 
-func TestGatewayCandidatesPicksDistinctDirectHealthy(t *testing.T) {
+func TestGatewayCandidatesPicksDistinctCountries(t *testing.T) {
 	p := &Pipeline{}
 	p.cache.Store(&CachedData{Entries: []CachedEntry{
-		fallbackEntry("dead.example", false, true),
-		fallbackEntry("a.example", true, false),
-		fallbackEntry("b.example", true, true),
-		fallbackEntry("c.example", true, true),
-		fallbackEntry("d.example", true, true),
+		fallbackEntry("dead.example", "NL", false, true),
+		fallbackEntry("nl-a.example", "NL", true, false),
+		fallbackEntry("nl-b.example", "NL", true, true),
+		fallbackEntry("de.example", "DE", true, true),
+		fallbackEntry("fi.example", "FI", true, true),
+		fallbackEntry("kz.example", "KZ", true, true),
 	}})
 
-	candidates := p.gatewayCandidates(3)
-	if len(candidates) != 3 {
-		t.Fatalf("candidates = %d, want 3", len(candidates))
+	candidates := p.gatewayCandidates(6)
+	if len(candidates) != 4 {
+		t.Fatalf("candidates = %d, want 4 distinct countries", len(candidates))
 	}
+	countries := map[string]int{}
 	for _, record := range candidates {
 		if record.Host == "dead.example" {
 			t.Fatal("direct-unhealthy record selected")
 		}
+		countries[record.Host]++
+		if countries[record.Host] > 1 {
+			t.Fatalf("duplicate candidate %s", record.Host)
+		}
+	}
+	if candidates[0].Host != "nl-a.example" || candidates[1].Host == "nl-b.example" {
+		t.Fatalf("country diversity broken: %v", candidates)
 	}
 }
 

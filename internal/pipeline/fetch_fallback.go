@@ -6,12 +6,13 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/fetch"
 	"github.com/michael/vless-sub-server/internal/parse"
 )
 
-const maxGatewayCandidates = 3
+const maxGatewayCandidates = 6
 
 // retryFailedFetchesViaPool refetches sources that failed on direct egress
 // through healthy proxies from the pool itself. An anti-censorship aggregator
@@ -64,29 +65,52 @@ func (p *Pipeline) retryFailedFetchesViaPool(ctx context.Context, fetched []fetc
 }
 
 // gatewayCandidates picks up to limit distinct direct-healthy pool records
-// from the last published cache. Direct health is the right signal here: the
-// gateway dials the proxy server from our own egress.
+// from the last published cache, one per distinct exit country. Country
+// diversity matters: geo-blocked sources (e.g. RU/CIS-only subscriptions)
+// refuse some exit countries but accept others, so the retry loop must span
+// countries rather than retrying the same region. Direct health is the right
+// signal here: the gateway dials the proxy server from our own egress.
 func (p *Pipeline) gatewayCandidates(limit int) []parse.ProxyRecord {
 	data, ok := p.Cached()
 	if !ok {
 		return nil
 	}
-	seen := map[string]bool{}
+	seenIdentity := map[string]bool{}
+	seenCountry := map[string]bool{}
 	records := make([]parse.ProxyRecord, 0, limit)
 	for _, entry := range data.Entries {
 		if !entry.DirectHealthy {
 			continue
 		}
-		record := entry.Entry.Record
-		key := identity(record)
-		if seen[key] {
+		countryCode := directExitCountry(entry.Countries)
+		if seenCountry[countryCode] {
 			continue
 		}
-		seen[key] = true
+		record := entry.Entry.Record
+		key := identity(record)
+		if seenIdentity[key] {
+			continue
+		}
+		seenIdentity[key] = true
+		seenCountry[countryCode] = true
 		records = append(records, record)
 		if len(records) >= limit {
 			break
 		}
 	}
 	return records
+}
+
+func directExitCountry(countries country.RouteCountries) string {
+	for _, candidate := range []string{
+		countries.DirectV4.ObservedCountry,
+		countries.DirectV4.Country,
+		countries.DirectV6.ObservedCountry,
+		countries.DirectV6.Country,
+	} {
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return "unknown"
 }
