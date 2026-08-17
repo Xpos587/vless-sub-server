@@ -67,6 +67,7 @@ type Pipeline struct {
 	runtime      *quality.Store
 	countryState *country.StateStore
 	cache        atomic.Value // stores *CachedData
+	metrics      atomic.Value // stores *metrics.Snapshot
 	refreshMu    sync.Mutex   // Refresh and country-only reprobes share mutable runtime state.
 }
 
@@ -123,7 +124,12 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	now := time.Now()
 	result := RefreshResult{DirectCountrySources: make(map[string]int), WarpCountrySources: make(map[string]int)}
 	fetched := fetch.FetchSubscriptions(ctx, p.cfg.SubscriptionURLs, 15*time.Second)
-	lines := p.sourceCache.Merge(now, fetched, p.cfg.SourceStaleMaxAge)
+	merged := p.sourceCache.MergeDetailed(now, fetched, p.cfg.SourceStaleMaxAge)
+	attributions, owners := AttributeSources(merged)
+	var lines []string
+	for _, source := range merged {
+		lines = append(lines, source.Lines...)
+	}
 	parsed := parse.ParseAllLines(lines)
 	filtered := parse.ApplyNameFilter(parsed.Records, p.cfg.NameInclude, p.cfg.NameExclude)
 	result.Parsed = len(filtered)
@@ -246,6 +252,7 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	directMeta, warpMeta := meta, meta
 	directMeta.TotalAlive, warpMeta.TotalAlive = len(directEntries), len(warpEntries)
 	p.cache.Store(&CachedData{Entries: cachedEntries, Metadata: meta, Output: format.FormatOutput(directEntries, directMeta), JSONOutput: format.FormatXrayJSON(warpEntries, warpMeta), LastRefresh: now})
+	p.metrics.Store(p.buildMetricsSnapshot(now, attributions, owners, entries, cachedEntries))
 	if p.countryState != nil {
 		if err := p.countryState.Save(); err != nil {
 			result.CountryStateSaveFailed = true

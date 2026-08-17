@@ -76,6 +76,25 @@ func main() {
 	mux.HandleFunc("/health", noindex(handleHealth))
 	mux.HandleFunc("/_exit", noindex(handleExitObservation))
 
+	// Internal-only metrics listener: scraped by VictoriaMetrics over the
+	// private container network; Traefik never routes here.
+	if cfg.MetricsPort > 0 {
+		metricsMux := http.NewServeMux()
+		metricsMux.HandleFunc("/metrics", handleMetrics)
+		metricsMux.HandleFunc("/health", handleHealth)
+		metricsServer := &http.Server{
+			Addr:    fmt.Sprintf(":%d", cfg.MetricsPort),
+			Handler: metricsMux,
+		}
+		go func() {
+			log.Printf("[metrics] listening on :%d", cfg.MetricsPort)
+			if err := metricsServer.ListenAndServe(); err != http.ErrServerClosed {
+				log.Printf("[metrics] error: %v", err)
+			}
+		}()
+		defer metricsServer.Close()
+	}
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
@@ -215,6 +234,17 @@ func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pip
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte("ok"))
+}
+
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	snapshot, ok := service.MetricsSnapshot()
+	if !ok {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.Write(snapshot.Render())
 }
 
 // noindex marks every response as off-limits for crawlers; the subscription

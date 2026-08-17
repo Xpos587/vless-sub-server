@@ -68,11 +68,7 @@ func ParseAllLines(lines []string) ParseResult {
 			continue
 		}
 
-		query := url.Values{}
-		for name, value := range record.QueryParams {
-			query.Set(name, value)
-		}
-		key := record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol) + ":" + record.UUIDOrPassword + ":" + query.Encode()
+		key := DedupKey(*record)
 		if seen[key] {
 			duplicates++
 			continue
@@ -82,6 +78,16 @@ func ParseAllLines(lines []string) ParseResult {
 	}
 
 	return ParseResult{Records: records, Skipped: skipped, Duplicates: duplicates}
+}
+
+// DedupKey is the canonical record identity used by ParseAllLines to drop
+// duplicate configs. Exported so attribution can mirror the same dedup.
+func DedupKey(record ProxyRecord) string {
+	query := url.Values{}
+	for name, value := range record.QueryParams {
+		query.Set(name, value)
+	}
+	return record.Host + ":" + strconv.Itoa(record.Port) + ":" + string(record.Protocol) + ":" + record.UUIDOrPassword + ":" + query.Encode()
 }
 
 func ApplyNameFilter(records []ProxyRecord, include, exclude string) []ProxyRecord {

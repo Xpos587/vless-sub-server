@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -34,6 +36,8 @@ type Config struct {
 	MaxConcurrent          int           `env:"MAX_CONCURRENT" envDefault:"50"`
 	GeoDatDir              string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
 	Hwid                   string        `env:"HWID,required"`
+	SourceAliases          []string      `env:"SOURCE_ALIASES" envSeparator:","`
+	MetricsPort            int           `env:"METRICS_PORT" envDefault:"9090"`
 }
 
 func Load() (*Config, error) {
@@ -70,6 +74,12 @@ func Load() (*Config, error) {
 	var err error
 	if c.Port, err = intEnv("PORT", c.Port); err != nil {
 		return nil, err
+	}
+	if c.MetricsPort, err = intEnv("METRICS_PORT", 9090); err != nil || c.MetricsPort < 0 || c.MetricsPort > 65535 {
+		return nil, fmt.Errorf("METRICS_PORT must be a valid port or 0 to disable")
+	}
+	if raw := os.Getenv("SOURCE_ALIASES"); raw != "" {
+		c.SourceAliases = strings.Split(raw, ",")
 	}
 	if c.MaxConcurrent, err = intEnv("MAX_CONCURRENT", c.MaxConcurrent); err != nil || c.MaxConcurrent < 1 {
 		return nil, fmt.Errorf("MAX_CONCURRENT must be positive")
@@ -183,4 +193,20 @@ var PlaceholderHosts = map[string]bool{
 	"example.com": true, "example.org": true,
 	"0.0.0.0": true, "127.0.0.1": true,
 	"localhost": true, "::1": true,
+}
+
+// SourceAlias names a subscription source for metrics labels. Explicit
+// aliases (SOURCE_ALIASES, same order as SUBSCRIPTION_URLS) win; the fallback
+// is a short hash so upstream URLs and their tokens never leak into metrics.
+func (c *Config) SourceAlias(index int) string {
+	if index < len(c.SourceAliases) {
+		if alias := strings.TrimSpace(c.SourceAliases[index]); alias != "" {
+			return alias
+		}
+	}
+	if index < len(c.SubscriptionURLs) {
+		sum := sha256.Sum256([]byte(c.SubscriptionURLs[index]))
+		return hex.EncodeToString(sum[:])[:8]
+	}
+	return fmt.Sprintf("source-%d", index)
 }
