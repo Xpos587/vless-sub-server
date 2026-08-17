@@ -189,8 +189,11 @@ func writeSubscriptionResponse(w http.ResponseWriter, r *http.Request, data *pip
 	}
 	response := subview.Render(data, options)
 	contentType := "text/plain; charset=utf-8"
-	if options.Format != subview.FormatURL {
+	switch options.Format {
+	case subview.FormatJSON, subview.FormatSingbox:
 		contentType = "application/json; charset=utf-8"
+	case subview.FormatClash:
+		contentType = "application/yaml; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-cache")

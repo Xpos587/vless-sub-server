@@ -6,6 +6,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/xtls/xray-core v1.260327.0
 	golang.org/x/sync v0.20.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

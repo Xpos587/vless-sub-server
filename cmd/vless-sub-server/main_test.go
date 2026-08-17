@@ -84,6 +84,25 @@ func TestWriteSubscriptionResponseSingbox(t *testing.T) {
 	}
 }
 
+func TestWriteSubscriptionResponseClash(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/sub?format=clash", nil)
+	writeSubscriptionResponse(recorder, request, handlerCache())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/yaml; charset=utf-8" {
+		t.Fatalf("content type = %q", got)
+	}
+	if got := recorder.Header().Get("X-Profile"); got != "ru" {
+		t.Fatalf("X-Profile = %q", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "proxies:") || !strings.Contains(body, "GEOSITE,category-ip-geo-detect,REJECT") {
+		t.Fatalf("clash body incomplete: %s", body)
+	}
+}
+
 func TestWriteSubscriptionResponseKeepsRootURLDirectForFullConfigClients(t *testing.T) {
 	for name, headers := range map[string]map[string]string{
 		"v2rayNG": {"User-Agent": "v2rayNG/2.2.6"},

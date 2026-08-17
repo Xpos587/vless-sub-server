@@ -186,6 +186,30 @@ func TestRenderSingboxProducesSingleConfig(t *testing.T) {
 	}
 }
 
+func TestParseClashFormatDefaults(t *testing.T) {
+	options, err := Parse(url.Values{"format": {"clash"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Format != FormatClash || !options.Warp || options.Profile != format.RoutingProfileRussia {
+		t.Fatalf("clash defaults = %#v", options)
+	}
+}
+
+func TestRenderClashProducesYAML(t *testing.T) {
+	data := sampleCache()
+	response := Render(data, Options{Format: FormatClash, Warp: true, Profile: format.RoutingProfileRussia})
+	body := string(response.Body)
+	for _, fragment := range []string{"proxies:", "proxy-groups:", "rules:", "dns:"} {
+		if !contains(body, fragment) {
+			t.Fatalf("clash body missing %q:\n%s", fragment, body)
+		}
+	}
+	if response.EntryCount == 0 {
+		t.Fatalf("clash response lost entries: %#v", response)
+	}
+}
+
 func TestParseValidatesWarpAndFormat(t *testing.T) {
 	for name, values := range map[string]url.Values{
 		"warp":   {"warp": {"sometimes"}},

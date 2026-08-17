@@ -19,6 +19,7 @@ const (
 	FormatURL     Format = "url"
 	FormatJSON    Format = "json"
 	FormatSingbox Format = "singbox"
+	FormatClash   Format = "clash"
 
 	ClientUnknown Client = "unknown"
 	ClientV2rayNG Client = "v2rayng"
@@ -54,20 +55,21 @@ func ParseForClient(values url.Values, client Client) (Options, error) {
 	if value := values.Get("format"); value != "" {
 		options.Format = Format(value)
 	}
-	if options.Format != FormatURL && options.Format != FormatJSON && options.Format != FormatSingbox {
+	if options.Format != FormatURL && options.Format != FormatJSON && options.Format != FormatSingbox && options.Format != FormatClash {
 		return Options{}, fmt.Errorf("unsupported format %q", options.Format)
 	}
 
-	options.Warp = options.Format == FormatJSON || options.Format == FormatSingbox
-	// Flattening clients break the Xray proxy -> WARP chain. sing-box keeps it
-	// via outbound detour, so only the Xray JSON format needs the exception.
-	if options.Format != FormatSingbox && (client == ClientExclave || client == ClientHusi) {
+	options.Warp = options.Format != FormatURL
+	// Flattening clients break the Xray proxy -> WARP chain only in the
+	// full-config Xray JSON format. sing-box (detour) and mihomo (relay)
+	// keep the chain.
+	if options.Format == FormatJSON && (client == ClientExclave || client == ClientHusi) {
 		options.Warp = false
 	}
 	if value := values.Get("warp"); value != "" {
 		switch value {
 		case "on":
-			if options.Format != FormatSingbox && (client == ClientExclave || client == ClientHusi) {
+			if options.Format == FormatJSON && (client == ClientExclave || client == ClientHusi) {
 				return Options{}, fmt.Errorf("warp=on is unsupported by %s subscription import", client)
 			}
 			options.Warp = true
@@ -155,6 +157,9 @@ func Render(data *pipeline.CachedData, options Options) Response {
 		return response
 	case FormatSingbox:
 		response.Body = format.FormatSingboxJSONWithOptions(entries, meta, format.SingboxOptions{Warp: options.Warp, Profile: options.Profile})
+		return response
+	case FormatClash:
+		response.Body = format.FormatClashYAMLWithOptions(entries, meta, format.ClashOptions{Warp: options.Warp, Profile: options.Profile})
 		return response
 	}
 	response.Body = []byte(format.FormatOutput(entries, meta))
