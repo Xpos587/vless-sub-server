@@ -37,7 +37,7 @@ func FormatClashYAMLWithOptions(entries []rename.RenamedEntry, meta FormatMetada
 	warpEnabled := options.Warp && len(names) > 0
 	final := "PROXY"
 	if warpEnabled {
-		final = "WARP"
+		final = "warp"
 	}
 	if len(names) == 0 {
 		final = "DIRECT"
@@ -63,13 +63,6 @@ func FormatClashYAMLWithOptions(entries []rename.RenamedEntry, meta FormatMetada
 				"proxies": append([]string{"AUTO"}, names...),
 			},
 		)
-		if warpEnabled {
-			groups = append(groups, map[string]any{
-				"name":    "WARP",
-				"type":    "relay",
-				"proxies": []string{"PROXY", "warp"},
-			})
-		}
 	}
 
 	config := map[string]any{
@@ -91,16 +84,17 @@ func FormatClashYAMLWithOptions(entries []rename.RenamedEntry, meta FormatMetada
 
 func buildClashWarpProxy() map[string]any {
 	return map[string]any{
-		"name":        "warp",
-		"type":        "wireguard",
-		"server":      strings.Split(warp.Endpoint, ":")[0],
-		"port":        2408,
-		"ip":          strings.Split(warp.Address, "/")[0],
-		"private-key": warp.SecretKey,
-		"public-key":  warp.PublicKey,
-		"allowed-ips": []string{"0.0.0.0/0", "::/0"},
-		"mtu":         1280,
-		"udp":         true,
+		"name":         "warp",
+		"type":         "wireguard",
+		"server":       strings.Split(warp.Endpoint, ":")[0],
+		"port":         2408,
+		"ip":           strings.Split(warp.Address, "/")[0],
+		"private-key":  warp.SecretKey,
+		"public-key":   warp.PublicKey,
+		"allowed-ips":  []string{"0.0.0.0/0", "::/0"},
+		"mtu":          1280,
+		"udp":          true,
+		"dialer-proxy": "PROXY",
 	}
 }
 

@@ -181,7 +181,7 @@ func TestFormatClashYAMLFiltersUnsupportedTransports(t *testing.T) {
 	}
 }
 
-func TestFormatClashYAMLWarpChainViaRelay(t *testing.T) {
+func TestFormatClashYAMLWarpChainViaDialerProxy(t *testing.T) {
 	entries := []rename.RenamedEntry{clashEntry("node", parse.ProxyRecord{
 		Protocol: parse.VLESS, Host: "a.example.com", Port: 443, UUIDOrPassword: "u",
 		QueryParams: map[string]string{"type": "tcp", "security": "reality", "pbk": "k"},
@@ -196,19 +196,17 @@ func TestFormatClashYAMLWarpChainViaRelay(t *testing.T) {
 	if warpProxy["private-key"] == nil || warpProxy["public-key"] == nil {
 		t.Fatalf("warp keys missing: %#v", warpProxy)
 	}
-	groups := clashGroups(t, config)
-	relay := groups["WARP"]
-	if relay == nil || relay["type"] != "relay" {
-		t.Fatalf("relay group missing: %#v", groups)
+	if warpProxy["dialer-proxy"] != "PROXY" {
+		t.Fatalf("warp must dial through PROXY: %#v", warpProxy)
 	}
-	members := relay["proxies"].([]any)
-	if len(members) != 2 || members[0] != "PROXY" || members[1] != "warp" {
-		t.Fatalf("relay chain must be PROXY -> warp: %#v", members)
+	groups := clashGroups(t, config)
+	if _, ok := groups["WARP"]; ok {
+		t.Fatalf("relay group is removed in modern mihomo, use dialer-proxy: %#v", groups)
 	}
 	rules := config["rules"].([]any)
 	last := rules[len(rules)-1].(string)
-	if last != "MATCH,WARP" {
-		t.Fatalf("MATCH must point at WARP: %s", last)
+	if last != "MATCH,warp" {
+		t.Fatalf("MATCH must point at warp: %s", last)
 	}
 }
 
@@ -265,7 +263,7 @@ func TestFormatClashYAMLRussiaProfileRulesAndDNS(t *testing.T) {
 		t.Fatalf("proxy-server-nameserver wrong: %#v", proxyNS)
 	}
 	nameserver := dns["nameserver"].([]any)
-	if len(nameserver) == 0 || nameserver[0] != "https://1.1.1.1/dns-query#WARP" {
+	if len(nameserver) == 0 || nameserver[0] != "https://1.1.1.1/dns-query#warp" {
 		t.Fatalf("nameserver must go through warp chain: %#v", nameserver)
 	}
 	policy := dns["nameserver-policy"].(map[string]any)
