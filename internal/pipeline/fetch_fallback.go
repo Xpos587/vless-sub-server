@@ -14,6 +14,47 @@ import (
 
 const maxGatewayCandidates = 6
 
+// fetchAllSources fetches every subscription URL: sources with a dedicated
+// proxy (SOURCE_FETCH_PROXIES, e.g. an RU socks5 for RU-only hosts) go
+// through it first and fall back to direct egress on proxy failure.
+func (p *Pipeline) fetchAllSources(ctx context.Context) []fetch.FetchResult {
+	urls := p.cfg.SubscriptionURLs
+	results := make([]fetch.FetchResult, len(urls))
+	directIdx := make([]int, 0, len(urls))
+
+	for i, url := range urls {
+		proxyURL := p.cfg.FetchProxyURL(i)
+		if proxyURL == "" {
+			directIdx = append(directIdx, i)
+			continue
+		}
+		transport, err := fetch.Socks5Transport(proxyURL, 15*time.Second)
+		if err != nil {
+			log.Printf("[fetch] invalid dedicated proxy for source %d: %v", i, err)
+			directIdx = append(directIdx, i)
+			continue
+		}
+		result := fetch.FetchSubscriptionsVia(ctx, []string{url}, 20*time.Second, transport, "socks5")[0]
+		if result.Status == "ok" {
+			results[i] = result
+			continue
+		}
+		log.Printf("[fetch] dedicated proxy failed for source %d, retrying direct", i)
+		directIdx = append(directIdx, i)
+	}
+
+	if len(directIdx) > 0 {
+		directURLs := make([]string, len(directIdx))
+		for j, i := range directIdx {
+			directURLs[j] = urls[i]
+		}
+		for j, result := range fetch.FetchSubscriptions(ctx, directURLs, 15*time.Second) {
+			results[directIdx[j]] = result
+		}
+	}
+	return results
+}
+
 // retryFailedFetchesViaPool refetches sources that failed on direct egress
 // through healthy proxies from the pool itself. An anti-censorship aggregator
 // should be able to use its own verified exits: subscription hosts are

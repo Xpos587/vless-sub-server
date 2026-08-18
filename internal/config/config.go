@@ -39,6 +39,7 @@ type Config struct {
 	SourceAliases          []string      `env:"SOURCE_ALIASES" envSeparator:","`
 	MetricsPort            int           `env:"METRICS_PORT" envDefault:"9090"`
 	FetchProxyFallback     bool          `env:"FETCH_PROXY_FALLBACK" envDefault:"true"`
+	SourceFetchProxies     []string      `env:"SOURCE_FETCH_PROXIES" envSeparator:","`
 }
 
 func Load() (*Config, error) {
@@ -81,6 +82,9 @@ func Load() (*Config, error) {
 	}
 	if raw := os.Getenv("SOURCE_ALIASES"); raw != "" {
 		c.SourceAliases = strings.Split(raw, ",")
+	}
+	if raw := os.Getenv("SOURCE_FETCH_PROXIES"); raw != "" {
+		c.SourceFetchProxies = strings.Split(raw, ",")
 	}
 	if c.MaxConcurrent, err = intEnv("MAX_CONCURRENT", c.MaxConcurrent); err != nil || c.MaxConcurrent < 1 {
 		return nil, fmt.Errorf("MAX_CONCURRENT must be positive")
@@ -217,4 +221,13 @@ func (c *Config) SourceAlias(index int) string {
 		return hex.EncodeToString(sum[:])[:8]
 	}
 	return fmt.Sprintf("source-%d", index)
+}
+
+// FetchProxyURL returns the dedicated fetch proxy (socks5 URL) assigned to a
+// source by position in SOURCE_FETCH_PROXIES, or "" for direct egress.
+func (c *Config) FetchProxyURL(index int) string {
+	if index < len(c.SourceFetchProxies) {
+		return strings.TrimSpace(c.SourceFetchProxies[index])
+	}
+	return ""
 }

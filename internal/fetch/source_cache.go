@@ -52,7 +52,7 @@ func (c *SourceCache) MergeDetailed(now time.Time, results []FetchResult, maxAge
 			}
 			copyLines := append([]string(nil), result.Lines...)
 			c.snapshots[result.URL] = sourceSnapshot{lines: copyLines, lastSuccess: now}
-			merged = append(merged, MergedSource{URL: result.URL, Lines: copyLines, FetchOK: true, ViaProxy: result.Via == "proxy"})
+			merged = append(merged, MergedSource{URL: result.URL, Lines: copyLines, FetchOK: true, ViaProxy: result.Via != ""})
 			continue
 		}
 		if isAuthoritativeFailure(result.Error) {
