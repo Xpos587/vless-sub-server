@@ -235,7 +235,7 @@ func TestFormatSingboxJSONRussiaProfileRules(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"geosite-category-ads-all", "geosite-category-ip-geo-detect",
+		"geosite-category-ads-all", "geosite-category-ip-geo-detect", "geosite-torrent",
 		"geosite-ozon", "geosite-wildberries", "geosite-category-ru", "geosite-category-gov-ru",
 		"geoip-ru",
 	} {
@@ -255,7 +255,7 @@ func TestFormatSingboxJSONRussiaProfileRules(t *testing.T) {
 			for _, s := range sets {
 				joined += s.(string) + ","
 			}
-			if !strings.Contains(joined, "category-ip-geo-detect") || !strings.Contains(joined, "category-ads-all") {
+			if !strings.Contains(joined, "category-ip-geo-detect") || !strings.Contains(joined, "category-ads-all") || !strings.Contains(joined, "geosite-torrent") {
 				t.Fatalf("reject rule must block ads+ip checkers: %#v", rule)
 			}
 		}

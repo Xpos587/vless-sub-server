@@ -13,13 +13,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Stage 2: Download Xray geo dat files + CA certs
 FROM docker.io/library/alpine:3.21 AS geo-builder
 ARG XRAY_VERSION=26.2.6
+ARG GEOSITE_REPO=Xpos587/hypcat-geosite
 RUN --mount=type=cache,target=/etc/apk/cache \
     apk add --no-cache curl unzip ca-certificates && \
     mkdir -p /tmp/geo && \
     curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip" \
     -o /tmp/xray.zip && \
-    unzip -o /tmp/xray.zip -d /tmp/geo geosite.dat geoip.dat && \
-    rm /tmp/xray.zip
+    unzip -o /tmp/xray.zip -d /tmp/geo geoip.dat && \
+    rm /tmp/xray.zip && \
+    curl -fsSL "https://github.com/${GEOSITE_REPO}/releases/latest/download/geosite.dat" \
+    -o /tmp/geo/geosite.dat && \
+    test -s /tmp/geo/geosite.dat
 
 # Stage 3: Runtime (scratch — zero OS overhead)
 FROM scratch

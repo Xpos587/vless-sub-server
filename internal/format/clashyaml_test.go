@@ -243,6 +243,7 @@ func TestFormatClashYAMLRussiaProfileRulesAndDNS(t *testing.T) {
 	for _, want := range []string{
 		"GEOSITE,category-ads-all,REJECT",
 		"GEOSITE,category-ip-geo-detect,REJECT",
+		"GEOSITE,torrent,REJECT",
 		"GEOSITE,ozon,DIRECT",
 		"GEOSITE,wildberries,DIRECT",
 		"GEOSITE,category-ru,DIRECT",

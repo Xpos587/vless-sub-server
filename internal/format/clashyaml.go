@@ -291,6 +291,7 @@ func buildClashRules(profile RoutingProfile, final string) []string {
 		rules = append(rules,
 			"GEOSITE,category-ads-all,REJECT",
 			"GEOSITE,category-ip-geo-detect,REJECT",
+			"GEOSITE,torrent,REJECT",
 		)
 		for _, site := range clashRuGeosites {
 			rules = append(rules, "GEOSITE,"+site+",DIRECT")
