@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Stage 2: Download Xray geo dat files + CA certs
 FROM docker.io/library/alpine:3.21 AS geo-builder
 ARG XRAY_VERSION=26.2.6
-ARG GEOSITE_REPO=Xpos587/hypcat-geosite
+ARG GEOSITE_REPO=Artiffusion-Inc/outward-geosite
 RUN --mount=type=cache,target=/etc/apk/cache \
     apk add --no-cache curl unzip ca-certificates && \
     mkdir -p /tmp/geo && \

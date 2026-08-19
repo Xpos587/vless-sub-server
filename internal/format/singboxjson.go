@@ -362,7 +362,7 @@ func buildSingboxRoute(profile RoutingProfile, catchAll string, warpEndpoint boo
 	sets := []any{
 		singboxRemoteRuleSet("geosite-category-ads-all", singboxGeositeBase),
 		singboxRemoteRuleSet("geosite-category-ip-geo-detect", singboxGeositeBase),
-		singboxRemoteRuleSet("geosite-torrent", singboxGeositeBase),
+		singboxRemoteRuleSet("geosite-torrent", "https://raw.githubusercontent.com/Artiffusion-Inc/outward-geosite/release/sing-box/"),
 		singboxRemoteRuleSet("geoip-ru", singboxGeoipBase),
 	}
 	for _, tag := range singboxRuGeosites {
