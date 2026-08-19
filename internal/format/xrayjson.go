@@ -521,7 +521,6 @@ func buildRoutingRules(index int, warpEnabled bool, profile RoutingProfile) map[
 				"outboundTag": "block",
 				"domain": []string{
 					"geosite:category-ads",
-					"geosite:torrent",
 					"geosite:category-ip-geo-detect",
 				},
 			},

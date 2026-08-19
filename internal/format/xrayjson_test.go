@@ -596,7 +596,6 @@ func TestFormatXrayJSON_RoutingBlockRules(t *testing.T) {
 	domains := blockRule["domain"].([]any)
 	wantBlocked := []string{
 		"geosite:category-ads",
-		"geosite:torrent",
 		"geosite:category-ip-geo-detect",
 	}
 	if len(domains) != len(wantBlocked) {
