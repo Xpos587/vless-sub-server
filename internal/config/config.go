@@ -52,6 +52,9 @@ type Config struct {
 	PortCheckEnabled         bool          `env:"PORT_CHECK_ENABLED" envDefault:"false"`
 	PortCheckTimeout         time.Duration `env:"PORT_CHECK_TIMEOUT" envDefault:"3s"`
 	PortCheckMaxConcurrent   int           `env:"PORT_CHECK_MAX_CONCURRENT" envDefault:"4"`
+	DNSBLEnabled             bool          `env:"DNSBL_ENABLED" envDefault:"false"`
+	DNSBLTimeout             time.Duration `env:"DNSBL_TIMEOUT" envDefault:"3s"`
+	DNSBLMaxConcurrent       int           `env:"DNSBL_MAX_CONCURRENT" envDefault:"4"`
 }
 
 func Load() (*Config, error) {
@@ -85,6 +88,9 @@ func Load() (*Config, error) {
 		PortCheckEnabled:         false,
 		PortCheckTimeout:         3 * time.Second,
 		PortCheckMaxConcurrent:   4,
+		DNSBLEnabled:             false,
+		DNSBLTimeout:             3 * time.Second,
+		DNSBLMaxConcurrent:       4,
 	}
 	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
 		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
@@ -144,6 +150,17 @@ func Load() (*Config, error) {
 	}
 	if c.PortCheckMaxConcurrent, err = intEnv("PORT_CHECK_MAX_CONCURRENT", c.PortCheckMaxConcurrent); err != nil || c.PortCheckMaxConcurrent < 1 {
 		return nil, fmt.Errorf("PORT_CHECK_MAX_CONCURRENT must be positive")
+	}
+	if raw := os.Getenv("DNSBL_ENABLED"); raw != "" {
+		if c.DNSBLEnabled, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("DNSBL_ENABLED: %w", err)
+		}
+	}
+	if c.DNSBLTimeout, err = durationEnv("DNSBL_TIMEOUT", c.DNSBLTimeout); err != nil || c.DNSBLTimeout <= 0 {
+		return nil, fmt.Errorf("DNSBL_TIMEOUT must be positive")
+	}
+	if c.DNSBLMaxConcurrent, err = intEnv("DNSBL_MAX_CONCURRENT", c.DNSBLMaxConcurrent); err != nil || c.DNSBLMaxConcurrent < 1 {
+		return nil, fmt.Errorf("DNSBL_MAX_CONCURRENT must be positive")
 	}
 	if raw := os.Getenv("IP_INTEL_CHECK_PLACE"); raw != "" {
 		if c.IPIntelCheckPlace, err = strconv.ParseBool(raw); err != nil {

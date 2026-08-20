@@ -32,6 +32,13 @@ type Snapshot struct {
 	IPIntel IPIntelStats
 	ServiceStats []ServiceStat
 	PortStats    []PortStat
+	DNSBLStats   []DNSBLStat
+}
+
+type DNSBLStat struct {
+	Zone   string
+	Status string
+	Count  int
 }
 
 type PortStat struct {
@@ -121,6 +128,12 @@ func (s Snapshot) Render() []byte {
 		fmt.Fprintf(&b, "# HELP vlesssub_exit_port Exit IP port reachability counts.\n# TYPE vlesssub_exit_port gauge\n")
 		for _, stat := range s.PortStats {
 			fmt.Fprintf(&b, "vlesssub_exit_port{port=%d,status=%q} %d\n", stat.Port, stat.Status, stat.Count)
+		}
+	}
+	if len(s.DNSBLStats) > 0 {
+		fmt.Fprintf(&b, "# HELP vlesssub_dnsbl Exit IP DNSBL status counts.\n# TYPE vlesssub_dnsbl gauge\n")
+		for _, stat := range s.DNSBLStats {
+			fmt.Fprintf(&b, "vlesssub_dnsbl{zone=%q,status=%q} %d\n", stat.Zone, stat.Status, stat.Count)
 		}
 	}
 	return []byte(b.String())

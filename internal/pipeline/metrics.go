@@ -81,7 +81,26 @@ func (p *Pipeline) buildMetricsSnapshot(at time.Time, attributions []SourceAttri
 	}
 
 	portStats := buildPortStats(cached)
-	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats, ServiceStats: buildServiceStats(cached), PortStats: portStats}
+	dnsblStats := buildDNSBLStats(cached)
+	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats, ServiceStats: buildServiceStats(cached), PortStats: portStats, DNSBLStats: dnsblStats}
+}
+
+func buildDNSBLStats(cached []CachedEntry) []metrics.DNSBLStat {
+	type key struct{ zone, status string }
+	counts := map[key]int{}
+	for _, entry := range cached {
+		for _, result := range entry.DNSBLResults {
+			counts[key{result.Zone, result.Status}]++
+		}
+		for _, result := range entry.WarpDNSBLResults {
+			counts[key{result.Zone, result.Status}]++
+		}
+	}
+	stats := make([]metrics.DNSBLStat, 0, len(counts))
+	for k, count := range counts {
+		stats = append(stats, metrics.DNSBLStat{Zone: k.zone, Status: k.status, Count: count})
+	}
+	return stats
 }
 
 func buildPortStats(cached []CachedEntry) []metrics.PortStat {

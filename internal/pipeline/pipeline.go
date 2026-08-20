@@ -14,6 +14,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/dns"
+	"github.com/michael/vless-sub-server/internal/dnsbl"
 	"github.com/michael/vless-sub-server/internal/endpointgeo"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/fetch"
@@ -47,6 +48,8 @@ type CachedEntry struct {
 	WarpServices  []servicecheck.Result
 	PortResults   []portcheck.PortResult
 	WarpPortResults []portcheck.PortResult
+	DNSBLResults    []dnsbl.Result
+	WarpDNSBLResults []dnsbl.Result
 }
 
 type outputEntry struct {
@@ -61,6 +64,8 @@ type outputEntry struct {
 	WarpServices []servicecheck.Result
 	PortResults   []portcheck.PortResult
 	WarpPortResults []portcheck.PortResult
+	DNSBLResults    []dnsbl.Result
+	WarpDNSBLResults []dnsbl.Result
 }
 
 type RefreshResult struct {
@@ -233,7 +238,8 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	intelByIP := p.enrichExitIntel(ctx, probed, probes)
 	serviceByIP, warpServiceByIP := p.checkServices(ctx, ep, probed, probes)
 	portByIP := p.checkPorts(ctx, probes)
-	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, serviceByIP, warpServiceByIP, portByIP, &result)
+	dnsblByIP := p.checkDNSBL(ctx, probes)
+	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, serviceByIP, warpServiceByIP, portByIP, dnsblByIP, &result)
 	hasExisting := p.cache.Load() != nil
 	if !CanPublish(len(entries), hasExisting) {
 		return result
@@ -286,6 +292,8 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 			WarpServices:  append([]servicecheck.Result(nil), entries[i].WarpServices...),
 			PortResults:     append([]portcheck.PortResult(nil), entries[i].PortResults...),
 			WarpPortResults: append([]portcheck.PortResult(nil), entries[i].WarpPortResults...),
+			DNSBLResults:      append([]dnsbl.Result(nil), entries[i].DNSBLResults...),
+			WarpDNSBLResults:  append([]dnsbl.Result(nil), entries[i].WarpDNSBLResults...),
 		}
 		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entry)
@@ -477,7 +485,7 @@ func (p *Pipeline) markBandwidthAttempt(key string, now time.Time) {
 	p.runtime.Set(runtime)
 }
 
-func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, serviceByIP, warpServiceByIP map[string][]servicecheck.Result, portByIP map[string][]portcheck.PortResult, result *RefreshResult) ([]outputEntry, int) {
+func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, serviceByIP, warpServiceByIP map[string][]servicecheck.Result, portByIP map[string][]portcheck.PortResult, dnsblByIP map[string][]dnsbl.Result, result *RefreshResult) ([]outputEntry, int) {
 	type item struct {
 		record  parse.ProxyRecord
 		runtime quality.Runtime
@@ -488,6 +496,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 		warpServices []servicecheck.Result
 		ports    []portcheck.PortResult
 		warpPorts []portcheck.PortResult
+		dnsbl    []dnsbl.Result
+		warpDNSBL []dnsbl.Result
 	}
 	items := make([]item, 0, len(records))
 	geoAvailable := 0
@@ -523,6 +533,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			warpServices: warpServiceByIP[warpIP(probe)],
 			ports:        portByIP[directIP(probe)],
 			warpPorts:    portByIP[warpIP(probe)],
+			dnsbl:        dnsblByIP[directIP(probe)],
+			warpDNSBL:    dnsblByIP[warpIP(probe)],
 		})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -555,6 +567,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			WarpServices: item.warpServices,
 			PortResults:   item.ports,
 			WarpPortResults: item.warpPorts,
+			DNSBLResults:    item.dnsbl,
+			WarpDNSBLResults: item.warpDNSBL,
 		})
 	}
 	return entries, geoAvailable
@@ -717,6 +731,47 @@ func (p *Pipeline) enrichExitIntel(ctx context.Context, records []parse.ProxyRec
 	return byIP
 }
 
+// checkDNSBL queries the default DNSBL preset for each unique exit IP. It is
+// optional and disabled by default.
+func (p *Pipeline) checkDNSBL(ctx context.Context, probes map[int]*exitprobe.ExitProbeResult) map[string][]dnsbl.Result {
+	byIP := make(map[string][]dnsbl.Result)
+	if !p.cfg.DNSBLEnabled {
+		return byIP
+	}
+	unique := make(map[string]netip.Addr)
+	for _, probe := range probes {
+		if probe == nil {
+			continue
+		}
+		if probe.DirectCountry.Valid() {
+			unique[probe.DirectCountry.IP.String()] = probe.DirectCountry.IP
+		}
+		if probe.WarpCountry.Valid() {
+			unique[probe.WarpCountry.IP.String()] = probe.WarpCountry.IP
+		}
+	}
+	sem := make(chan struct{}, p.cfg.DNSBLMaxConcurrent)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ip := range unique {
+		wg.Add(1)
+		go func(ip netip.Addr) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			results := dnsbl.CheckIP(ctx, ip, dnsbl.DefaultLists, p.cfg.DNSBLTimeout, p.cfg.DNSBLMaxConcurrent)
+			mu.Lock()
+			byIP[ip.String()] = results
+			mu.Unlock()
+		}(ip)
+	}
+	wg.Wait()
+	return byIP
+}
 // checkServices runs service availability probes through the exact proxy and
 // WARP outbound tags. It deduplicates by exit IP to avoid probing the same
 // egress multiple times.
@@ -886,6 +941,8 @@ func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
 			WarpServices:  append([]servicecheck.Result(nil), entry.WarpServices...),
 			PortResults:     append([]portcheck.PortResult(nil), entry.PortResults...),
 			WarpPortResults: append([]portcheck.PortResult(nil), entry.WarpPortResults...),
+			DNSBLResults:      append([]dnsbl.Result(nil), entry.DNSBLResults...),
+			WarpDNSBLResults:  append([]dnsbl.Result(nil), entry.WarpDNSBLResults...),
 		}
 	}
 	return result

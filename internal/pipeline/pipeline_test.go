@@ -106,7 +106,7 @@ func TestOutputEntriesExcludeDeadAndOrderByStateThenScore(t *testing.T) {
 	result := RefreshResult{}
 	entries, _ := p.outputEntries(records, nil, map[string]*dns.DNSResult{
 		"healthy.example": {}, "recovering.example": {}, "degraded.example": {}, "dead.example": {},
-	}, nil, nil, nil, nil, &result)
+	}, nil, nil, nil, nil, nil, &result)
 	if len(entries) != 3 || entries[0].Record.Host != "healthy.example" || entries[1].Record.Host != "recovering.example" || entries[2].Record.Host != "degraded.example" {
 		t.Fatalf("entries = %#v", entries)
 	}
@@ -122,7 +122,7 @@ func TestOutputEntriesUsesEndpointGeoWhenDirectExitIsUnavailable(t *testing.T) {
 
 	entries, _ := p.outputEntries([]parse.ProxyRecord{record}, nil, map[string]*dns.DNSResult{
 		"balancer.example": {IP: "198.51.100.1", EndpointGeo: &geo.GeoInfo{CountryCode: "PL", City: "Warsaw", ISP: "Example Networks", IP: "198.51.100.1"}},
-	}, nil, nil, nil, nil, &RefreshResult{})
+	}, nil, nil, nil, nil, nil, &RefreshResult{})
 	if len(entries) != 1 || entries[0].Geo == nil || entries[0].Geo.City != "Warsaw" {
 		t.Fatalf("endpoint geo was not used: %#v", entries)
 	}
@@ -138,7 +138,7 @@ func TestOutputEntriesKeepsFinalWarpGeoSeparateFromDirectNameGeo(t *testing.T) {
 		WarpGeoInfo: &geo.GeoInfo{CountryCode: "VN", City: "Hanoi", ISP: "Cloudflare"},
 	})
 
-	entries, _ := p.outputEntries([]parse.ProxyRecord{record}, nil, map[string]*dns.DNSResult{"shared.example": {}}, nil, nil, nil, nil, &RefreshResult{})
+	entries, _ := p.outputEntries([]parse.ProxyRecord{record}, nil, map[string]*dns.DNSResult{"shared.example": {}}, nil, nil, nil, nil, nil, &RefreshResult{})
 	if entries[0].WarpGeo == nil || entries[0].WarpGeo.City != "Hanoi" || entries[0].Geo.City != "Hong Kong" {
 		t.Fatalf("name geos = direct:%#v warp:%#v", entries[0].Geo, entries[0].WarpGeo)
 	}

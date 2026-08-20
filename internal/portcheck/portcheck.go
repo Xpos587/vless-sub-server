@@ -23,7 +23,7 @@ type PortResult struct {
 	Status Status
 }
 
-var DefaultPorts = []int{80, 443, 25, 587, 465, 1080, 8080}
+var DefaultPorts = []int{80, 443, 25, 587, 465, 1080, 8080, 1194, 51820, 8388, 8443}
 
 func CheckPorts(ctx context.Context, ip string, ports []int, timeout time.Duration, maxConcurrent int) []PortResult {
 	if maxConcurrent < 1 {
