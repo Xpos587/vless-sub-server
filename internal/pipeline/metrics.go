@@ -82,7 +82,20 @@ func (p *Pipeline) buildMetricsSnapshot(at time.Time, attributions []SourceAttri
 
 	portStats := buildPortStats(cached)
 	dnsblStats := buildDNSBLStats(cached)
-	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats, ServiceStats: buildServiceStats(cached), PortStats: portStats, DNSBLStats: dnsblStats}
+	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats, ServiceStats: p.buildServiceStats(), PortStats: portStats, DNSBLStats: dnsblStats}
+}
+
+// refreshServiceMetrics updates only the service availability stats in the
+// existing metrics snapshot, without rebuilding source stats.
+func (p *Pipeline) refreshServiceMetrics() {
+	snapshot, ok := p.MetricsSnapshot()
+	if !ok {
+		return
+	}
+	updated := *snapshot
+	updated.At = time.Now()
+	updated.ServiceStats = p.buildServiceStats()
+	p.metrics.Store(&updated)
 }
 
 func buildDNSBLStats(cached []CachedEntry) []metrics.DNSBLStat {
@@ -121,15 +134,23 @@ func buildPortStats(cached []CachedEntry) []metrics.PortStat {
 	return stats
 }
 
-func buildServiceStats(cached []CachedEntry) []metrics.ServiceStat {
+func (p *Pipeline) buildServiceStats() []metrics.ServiceStat {
+	cached, ok := p.Cached()
+	if !ok {
+		return nil
+	}
 	type key struct{ service, status, route string }
 	counts := map[key]int{}
-	for _, entry := range cached {
-		for _, result := range entry.Services {
-			counts[key{result.Service, string(result.Status), "direct"}]++
+	for _, entry := range cached.Entries {
+		if results, ok := p.serviceCache.Get(directExitIP(entry.Countries)); ok {
+			for _, result := range results {
+				counts[key{result.Service, string(result.Status), "direct"}]++
+			}
 		}
-		for _, result := range entry.WarpServices {
-			counts[key{result.Service, string(result.Status), "warp"}]++
+		if results, ok := p.serviceCache.Get(warpExitIP(entry.Countries)); ok {
+			for _, result := range results {
+				counts[key{result.Service, string(result.Status), "warp"}]++
+			}
 		}
 	}
 	stats := make([]metrics.ServiceStat, 0, len(counts))

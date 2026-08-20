@@ -879,6 +879,7 @@ func (p *Pipeline) RunServiceChecks(ctx context.Context) ServiceCheckResult {
 	}
 	wg.Wait()
 	result.Checked = len(stale)
+	p.refreshServiceMetrics()
 	return result
 }
 
