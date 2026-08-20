@@ -80,7 +80,26 @@ func (p *Pipeline) buildMetricsSnapshot(at time.Time, attributions []SourceAttri
 		}
 	}
 
-	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats, ServiceStats: buildServiceStats(cached)}
+	portStats := buildPortStats(cached)
+	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats, ServiceStats: buildServiceStats(cached), PortStats: portStats}
+}
+
+func buildPortStats(cached []CachedEntry) []metrics.PortStat {
+	type key struct{ port int; status string }
+	counts := map[key]int{}
+	for _, entry := range cached {
+		for _, result := range entry.PortResults {
+			counts[key{result.Port, string(result.Status)}]++
+		}
+		for _, result := range entry.WarpPortResults {
+			counts[key{result.Port, string(result.Status)}]++
+		}
+	}
+	stats := make([]metrics.PortStat, 0, len(counts))
+	for k, count := range counts {
+		stats = append(stats, metrics.PortStat{Port: k.port, Status: k.status, Count: count})
+	}
+	return stats
 }
 
 func buildServiceStats(cached []CachedEntry) []metrics.ServiceStat {

@@ -49,6 +49,9 @@ type Config struct {
 	ServiceCheckEnabled    bool          `env:"SERVICE_CHECK_ENABLED" envDefault:"false"`
 	ServiceCheckTimeout    time.Duration `env:"SERVICE_CHECK_TIMEOUT" envDefault:"10s"`
 	ServiceCheckMaxConcurrent int       `env:"SERVICE_CHECK_MAX_CONCURRENT" envDefault:"4"`
+	PortCheckEnabled         bool          `env:"PORT_CHECK_ENABLED" envDefault:"false"`
+	PortCheckTimeout         time.Duration `env:"PORT_CHECK_TIMEOUT" envDefault:"3s"`
+	PortCheckMaxConcurrent   int           `env:"PORT_CHECK_MAX_CONCURRENT" envDefault:"4"`
 }
 
 func Load() (*Config, error) {
@@ -79,6 +82,9 @@ func Load() (*Config, error) {
 		ServiceCheckEnabled:    false,
 		ServiceCheckTimeout:    10 * time.Second,
 		ServiceCheckMaxConcurrent: 4,
+		PortCheckEnabled:         false,
+		PortCheckTimeout:         3 * time.Second,
+		PortCheckMaxConcurrent:   4,
 	}
 	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
 		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
@@ -127,6 +133,17 @@ func Load() (*Config, error) {
 	}
 	if c.ServiceCheckMaxConcurrent, err = intEnv("SERVICE_CHECK_MAX_CONCURRENT", c.ServiceCheckMaxConcurrent); err != nil || c.ServiceCheckMaxConcurrent < 1 {
 		return nil, fmt.Errorf("SERVICE_CHECK_MAX_CONCURRENT must be positive")
+	}
+	if raw := os.Getenv("PORT_CHECK_ENABLED"); raw != "" {
+		if c.PortCheckEnabled, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("PORT_CHECK_ENABLED: %w", err)
+		}
+	}
+	if c.PortCheckTimeout, err = durationEnv("PORT_CHECK_TIMEOUT", c.PortCheckTimeout); err != nil || c.PortCheckTimeout <= 0 {
+		return nil, fmt.Errorf("PORT_CHECK_TIMEOUT must be positive")
+	}
+	if c.PortCheckMaxConcurrent, err = intEnv("PORT_CHECK_MAX_CONCURRENT", c.PortCheckMaxConcurrent); err != nil || c.PortCheckMaxConcurrent < 1 {
+		return nil, fmt.Errorf("PORT_CHECK_MAX_CONCURRENT must be positive")
 	}
 	if raw := os.Getenv("IP_INTEL_CHECK_PLACE"); raw != "" {
 		if c.IPIntelCheckPlace, err = strconv.ParseBool(raw); err != nil {

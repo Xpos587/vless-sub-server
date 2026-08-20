@@ -31,6 +31,13 @@ type Snapshot struct {
 	Sources []SourceSeries
 	IPIntel IPIntelStats
 	ServiceStats []ServiceStat
+	PortStats    []PortStat
+}
+
+type PortStat struct {
+	Port   int
+	Status string
+	Count  int
 }
 
 type ServiceStat struct {
@@ -108,6 +115,12 @@ func (s Snapshot) Render() []byte {
 		fmt.Fprintf(&b, "# HELP vlesssub_service_availability Service availability counts by route.\n# TYPE vlesssub_service_availability gauge\n")
 		for _, stat := range s.ServiceStats {
 			fmt.Fprintf(&b, "vlesssub_service_availability{service=%q,status=%q,route=%q} %d\n", stat.Service, stat.Status, stat.Route, stat.Count)
+		}
+	}
+	if len(s.PortStats) > 0 {
+		fmt.Fprintf(&b, "# HELP vlesssub_exit_port Exit IP port reachability counts.\n# TYPE vlesssub_exit_port gauge\n")
+		for _, stat := range s.PortStats {
+			fmt.Fprintf(&b, "vlesssub_exit_port{port=%d,status=%q} %d\n", stat.Port, stat.Status, stat.Count)
 		}
 	}
 	return []byte(b.String())

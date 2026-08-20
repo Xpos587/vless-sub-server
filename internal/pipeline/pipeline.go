@@ -21,6 +21,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/ipintel"
 	"github.com/michael/vless-sub-server/internal/parse"
+	"github.com/michael/vless-sub-server/internal/portcheck"
 	"github.com/michael/vless-sub-server/internal/quality"
 	"github.com/michael/vless-sub-server/internal/rename"
 	"github.com/michael/vless-sub-server/internal/servicecheck"
@@ -44,6 +45,8 @@ type CachedEntry struct {
 	WarpIntel     *ipintel.Intel
 	Services      []servicecheck.Result
 	WarpServices  []servicecheck.Result
+	PortResults   []portcheck.PortResult
+	WarpPortResults []portcheck.PortResult
 }
 
 type outputEntry struct {
@@ -56,6 +59,8 @@ type outputEntry struct {
 	WarpIntel *ipintel.Intel
 	Services     []servicecheck.Result
 	WarpServices []servicecheck.Result
+	PortResults   []portcheck.PortResult
+	WarpPortResults []portcheck.PortResult
 }
 
 type RefreshResult struct {
@@ -227,7 +232,8 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 
 	intelByIP := p.enrichExitIntel(ctx, probed, probes)
 	serviceByIP, warpServiceByIP := p.checkServices(ctx, ep, probed, probes)
-	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, serviceByIP, warpServiceByIP, &result)
+	portByIP := p.checkPorts(ctx, probes)
+	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, serviceByIP, warpServiceByIP, portByIP, &result)
 	hasExisting := p.cache.Load() != nil
 	if !CanPublish(len(entries), hasExisting) {
 		return result
@@ -278,6 +284,8 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 			WarpIntel:     cloneIntel(entries[i].WarpIntel),
 			Services:      append([]servicecheck.Result(nil), entries[i].Services...),
 			WarpServices:  append([]servicecheck.Result(nil), entries[i].WarpServices...),
+			PortResults:     append([]portcheck.PortResult(nil), entries[i].PortResults...),
+			WarpPortResults: append([]portcheck.PortResult(nil), entries[i].WarpPortResults...),
 		}
 		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entry)
@@ -469,7 +477,7 @@ func (p *Pipeline) markBandwidthAttempt(key string, now time.Time) {
 	p.runtime.Set(runtime)
 }
 
-func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, serviceByIP, warpServiceByIP map[string][]servicecheck.Result, result *RefreshResult) ([]outputEntry, int) {
+func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, serviceByIP, warpServiceByIP map[string][]servicecheck.Result, portByIP map[string][]portcheck.PortResult, result *RefreshResult) ([]outputEntry, int) {
 	type item struct {
 		record  parse.ProxyRecord
 		runtime quality.Runtime
@@ -478,6 +486,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 		probe   *exitprobe.ExitProbeResult
 		services []servicecheck.Result
 		warpServices []servicecheck.Result
+		ports    []portcheck.PortResult
+		warpPorts []portcheck.PortResult
 	}
 	items := make([]item, 0, len(records))
 	geoAvailable := 0
@@ -511,6 +521,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			probe:        probe,
 			services:     serviceByIP[directIP(probe)],
 			warpServices: warpServiceByIP[warpIP(probe)],
+			ports:        portByIP[directIP(probe)],
+			warpPorts:    portByIP[warpIP(probe)],
 		})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -541,6 +553,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			WarpIntel: warpIntel,
 			Services:     item.services,
 			WarpServices: item.warpServices,
+			PortResults:   item.ports,
+			WarpPortResults: item.warpPorts,
 		})
 	}
 	return entries, geoAvailable
@@ -772,6 +786,48 @@ func (p *Pipeline) checkServices(ctx context.Context, ep *exitprobe.ExitProber, 
 	return directByIP, warpByIP
 }
 
+// checkPorts probes a small set of TCP ports on each unique exit IP. It is
+// optional and disabled by default; enable only when you accept the extra
+// active probing traffic.
+func (p *Pipeline) checkPorts(ctx context.Context, probes map[int]*exitprobe.ExitProbeResult) map[string][]portcheck.PortResult {
+	byIP := make(map[string][]portcheck.PortResult)
+	if !p.cfg.PortCheckEnabled {
+		return byIP
+	}
+	unique := make(map[string]string)
+	for _, probe := range probes {
+		if probe == nil {
+			continue
+		}
+		if probe.DirectCountry.Valid() {
+			unique[probe.DirectCountry.IP.String()] = probe.DirectCountry.IP.String()
+		}
+		if probe.WarpCountry.Valid() {
+			unique[probe.WarpCountry.IP.String()] = probe.WarpCountry.IP.String()
+		}
+	}
+	sem := make(chan struct{}, p.cfg.PortCheckMaxConcurrent)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ip := range unique {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			results := portcheck.CheckPorts(ctx, ip, portcheck.DefaultPorts, p.cfg.PortCheckTimeout, p.cfg.PortCheckMaxConcurrent)
+			mu.Lock()
+			byIP[ip] = results
+			mu.Unlock()
+		}(ip)
+	}
+	wg.Wait()
+	return byIP
+}
 // startCheckPlaceViaPool builds a CheckPlace provider routed through the first
 // healthy proxy in the pool that can reach ipinfo.check.place without a
 // Cloudflare block. It returns nil if no proxy works or the feature is off.
@@ -828,6 +884,8 @@ func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
 			WarpIntel:     cloneIntel(entry.WarpIntel),
 			Services:      append([]servicecheck.Result(nil), entry.Services...),
 			WarpServices:  append([]servicecheck.Result(nil), entry.WarpServices...),
+			PortResults:     append([]portcheck.PortResult(nil), entry.PortResults...),
+			WarpPortResults: append([]portcheck.PortResult(nil), entry.WarpPortResults...),
 		}
 	}
 	return result
