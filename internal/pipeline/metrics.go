@@ -80,7 +80,25 @@ func (p *Pipeline) buildMetricsSnapshot(at time.Time, attributions []SourceAttri
 		}
 	}
 
-	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats}
+	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats, ServiceStats: buildServiceStats(cached)}
+}
+
+func buildServiceStats(cached []CachedEntry) []metrics.ServiceStat {
+	type key struct{ service, status, route string }
+	counts := map[key]int{}
+	for _, entry := range cached {
+		for _, result := range entry.Services {
+			counts[key{result.Service, string(result.Status), "direct"}]++
+		}
+		for _, result := range entry.WarpServices {
+			counts[key{result.Service, string(result.Status), "warp"}]++
+		}
+	}
+	stats := make([]metrics.ServiceStat, 0, len(counts))
+	for k, count := range counts {
+		stats = append(stats, metrics.ServiceStat{Service: k.service, Status: k.status, Route: k.route, Count: count})
+	}
+	return stats
 }
 
 // exitCountry picks the country a WARP-chain user actually exits from,

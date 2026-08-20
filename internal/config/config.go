@@ -46,6 +46,9 @@ type Config struct {
 	IPIntelMaxConcurrent   int           `env:"IP_INTEL_MAX_CONCURRENT" envDefault:"8"`
 	IPIntelCheckPlace      bool          `env:"IP_INTEL_CHECK_PLACE" envDefault:"false"`
 	IPIntelProxyURL        string        `env:"IP_INTEL_PROXY_URL"`
+	ServiceCheckEnabled    bool          `env:"SERVICE_CHECK_ENABLED" envDefault:"false"`
+	ServiceCheckTimeout    time.Duration `env:"SERVICE_CHECK_TIMEOUT" envDefault:"10s"`
+	ServiceCheckMaxConcurrent int       `env:"SERVICE_CHECK_MAX_CONCURRENT" envDefault:"4"`
 }
 
 func Load() (*Config, error) {
@@ -73,6 +76,9 @@ func Load() (*Config, error) {
 		IPIntelTimeout:         8 * time.Second,
 		IPIntelCacheTTL:        6 * time.Hour,
 		IPIntelMaxConcurrent:   8,
+		ServiceCheckEnabled:    false,
+		ServiceCheckTimeout:    10 * time.Second,
+		ServiceCheckMaxConcurrent: 4,
 	}
 	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
 		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
@@ -111,6 +117,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("IP_INTEL_MAX_CONCURRENT must be positive")
 	}
 	c.IPIntelProxyURL = os.Getenv("IP_INTEL_PROXY_URL")
+	if raw := os.Getenv("SERVICE_CHECK_ENABLED"); raw != "" {
+		if c.ServiceCheckEnabled, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("SERVICE_CHECK_ENABLED: %w", err)
+		}
+	}
+	if c.ServiceCheckTimeout, err = durationEnv("SERVICE_CHECK_TIMEOUT", c.ServiceCheckTimeout); err != nil || c.ServiceCheckTimeout <= 0 {
+		return nil, fmt.Errorf("SERVICE_CHECK_TIMEOUT must be positive")
+	}
+	if c.ServiceCheckMaxConcurrent, err = intEnv("SERVICE_CHECK_MAX_CONCURRENT", c.ServiceCheckMaxConcurrent); err != nil || c.ServiceCheckMaxConcurrent < 1 {
+		return nil, fmt.Errorf("SERVICE_CHECK_MAX_CONCURRENT must be positive")
+	}
 	if raw := os.Getenv("IP_INTEL_CHECK_PLACE"); raw != "" {
 		if c.IPIntelCheckPlace, err = strconv.ParseBool(raw); err != nil {
 			return nil, fmt.Errorf("IP_INTEL_CHECK_PLACE: %w", err)

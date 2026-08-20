@@ -30,6 +30,14 @@ type Snapshot struct {
 	At      time.Time
 	Sources []SourceSeries
 	IPIntel IPIntelStats
+	ServiceStats []ServiceStat
+}
+
+type ServiceStat struct {
+	Service string
+	Status  string
+	Route   string
+	Count   int
 }
 
 type IPIntelStats struct {
@@ -94,6 +102,12 @@ func (s Snapshot) Render() []byte {
 		fmt.Fprintf(&b, "# HELP vlesssub_exit_reputation_flag Exit IP reputation flag counts.\n# TYPE vlesssub_exit_reputation_flag gauge\n")
 		for _, flag := range sortedKeys(s.IPIntel.FlagCounts) {
 			fmt.Fprintf(&b, "vlesssub_exit_reputation_flag{flag=%q} %d\n", flag, s.IPIntel.FlagCounts[flag])
+		}
+	}
+	if len(s.ServiceStats) > 0 {
+		fmt.Fprintf(&b, "# HELP vlesssub_service_availability Service availability counts by route.\n# TYPE vlesssub_service_availability gauge\n")
+		for _, stat := range s.ServiceStats {
+			fmt.Fprintf(&b, "vlesssub_service_availability{service=%q,status=%q,route=%q} %d\n", stat.Service, stat.Status, stat.Route, stat.Count)
 		}
 	}
 	return []byte(b.String())

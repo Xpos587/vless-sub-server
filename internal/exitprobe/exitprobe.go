@@ -149,6 +149,24 @@ func (ep *ExitProber) Stop() {
 	}
 }
 
+// HTTPClient returns an *http.Client whose transport forces all requests
+// through the given outbound tag. It is used by service availability probes
+// that need to test the exact direct or WARP route.
+func (ep *ExitProber) HTTPClient(outboundTag string, timeout time.Duration) *http.Client {
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			ctx = session.SetForcedOutboundTagToContext(ctx, outboundTag)
+			host, portStr, _ := net.SplitHostPort(addr)
+			port, _ := strconv.Atoi(portStr)
+			return core.Dial(ctx, ep.instance, xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(port)))
+		},
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+	}
+	return &http.Client{Transport: transport, Timeout: timeout}
+}
+
 func (ep *ExitProber) ProbeAll(ctx context.Context, records []parse.ProxyRecord) map[int]*ExitProbeResult {
 	results := make(map[int]*ExitProbeResult, len(records))
 	var mu sync.Mutex

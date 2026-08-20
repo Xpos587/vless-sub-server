@@ -23,6 +23,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/quality"
 	"github.com/michael/vless-sub-server/internal/rename"
+	"github.com/michael/vless-sub-server/internal/servicecheck"
 )
 
 type CachedData struct {
@@ -41,6 +42,8 @@ type CachedEntry struct {
 	WarpHealthy   bool
 	Intel         *ipintel.Intel
 	WarpIntel     *ipintel.Intel
+	Services      []servicecheck.Result
+	WarpServices  []servicecheck.Result
 }
 
 type outputEntry struct {
@@ -51,6 +54,8 @@ type outputEntry struct {
 	Countries country.RouteCountries
 	Intel     *ipintel.Intel
 	WarpIntel *ipintel.Intel
+	Services     []servicecheck.Result
+	WarpServices []servicecheck.Result
 }
 
 type RefreshResult struct {
@@ -221,7 +226,8 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	}
 
 	intelByIP := p.enrichExitIntel(ctx, probed, probes)
-	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, &result)
+	serviceByIP, warpServiceByIP := p.checkServices(ctx, ep, probed, probes)
+	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, serviceByIP, warpServiceByIP, &result)
 	hasExisting := p.cache.Load() != nil
 	if !CanPublish(len(entries), hasExisting) {
 		return result
@@ -270,6 +276,8 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 			WarpHealthy:   runtime.WarpHealthy,
 			Intel:         cloneIntel(entries[i].Intel),
 			WarpIntel:     cloneIntel(entries[i].WarpIntel),
+			Services:      append([]servicecheck.Result(nil), entries[i].Services...),
+			WarpServices:  append([]servicecheck.Result(nil), entries[i].WarpServices...),
 		}
 		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entry)
@@ -461,13 +469,15 @@ func (p *Pipeline) markBandwidthAttempt(key string, now time.Time) {
 	p.runtime.Set(runtime)
 }
 
-func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, result *RefreshResult) ([]outputEntry, int) {
+func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, serviceByIP, warpServiceByIP map[string][]servicecheck.Result, result *RefreshResult) ([]outputEntry, int) {
 	type item struct {
 		record  parse.ProxyRecord
 		runtime quality.Runtime
 		geo     *geo.GeoInfo
 		lan     bool
 		probe   *exitprobe.ExitProbeResult
+		services []servicecheck.Result
+		warpServices []servicecheck.Result
 	}
 	items := make([]item, 0, len(records))
 	geoAvailable := 0
@@ -489,7 +499,19 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 		if info != nil {
 			geoAvailable++
 		}
-		items = append(items, item{record, runtime, info, dnsMap[record.Host].IsPrivate, probes[i]})
+		var probe *exitprobe.ExitProbeResult
+		if probes != nil {
+			probe = probes[i]
+		}
+		items = append(items, item{
+			record:       record,
+			runtime:       runtime,
+			geo:          info,
+			lan:          dnsMap[record.Host].IsPrivate,
+			probe:        probe,
+			services:     serviceByIP[directIP(probe)],
+			warpServices: warpServiceByIP[warpIP(probe)],
+		})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		left, right := items[i].runtime, items[j].runtime
@@ -517,6 +539,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			Countries: item.runtime.Countries,
 			Intel:     intel,
 			WarpIntel: warpIntel,
+			Services:     item.services,
+			WarpServices: item.warpServices,
 		})
 	}
 	return entries, geoAvailable
@@ -583,6 +607,20 @@ func cloneIntel(info *ipintel.Intel) *ipintel.Intel {
 		copy.Sources = append([]string(nil), info.Sources...)
 	}
 	return &copy
+}
+
+func directIP(probe *exitprobe.ExitProbeResult) string {
+	if probe != nil && probe.DirectCountry.Valid() {
+		return probe.DirectCountry.IP.String()
+	}
+	return ""
+}
+
+func warpIP(probe *exitprobe.ExitProbeResult) string {
+	if probe != nil && probe.WarpCountry.Valid() {
+		return probe.WarpCountry.IP.String()
+	}
+	return ""
 }
 
 // enrichExitIntel looks up reputation for each unique direct and WARP exit IP.
@@ -665,6 +703,75 @@ func (p *Pipeline) enrichExitIntel(ctx context.Context, records []parse.ProxyRec
 	return byIP
 }
 
+// checkServices runs service availability probes through the exact proxy and
+// WARP outbound tags. It deduplicates by exit IP to avoid probing the same
+// egress multiple times.
+func (p *Pipeline) checkServices(ctx context.Context, ep *exitprobe.ExitProber, records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult) (map[string][]servicecheck.Result, map[string][]servicecheck.Result) {
+	directByIP := make(map[string][]servicecheck.Result)
+	warpByIP := make(map[string][]servicecheck.Result)
+	if !p.cfg.ServiceCheckEnabled || ep == nil {
+		return directByIP, warpByIP
+	}
+	checkers := servicecheck.DefaultCheckers()
+	timeout := p.cfg.ServiceCheckTimeout
+
+	directUnique := make(map[string]int)
+	warpUnique := make(map[string]int)
+	for i := range records {
+		probe := probes[i]
+		if probe == nil {
+			continue
+		}
+		if probe.Metrics.InternetReachable && probe.DirectCountry.Valid() {
+			directUnique[probe.DirectCountry.IP.String()] = i
+		}
+		if probe.WarpCountry.Valid() {
+			warpUnique[probe.WarpCountry.IP.String()] = i
+		}
+	}
+
+	sem := make(chan struct{}, p.cfg.ServiceCheckMaxConcurrent)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for ip, index := range directUnique {
+		wg.Add(1)
+		go func(ip string, index int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			tag := fmt.Sprintf("proxy_%d_out", index)
+			results := servicecheck.CheckAll(ctx, ep.HTTPClient(tag, timeout), checkers)
+			mu.Lock()
+			directByIP[ip] = results
+			mu.Unlock()
+		}(ip, index)
+	}
+	for ip, index := range warpUnique {
+		wg.Add(1)
+		go func(ip string, index int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			tag := fmt.Sprintf("warp_%d_out", index)
+			results := servicecheck.CheckAll(ctx, ep.HTTPClient(tag, timeout), checkers)
+			mu.Lock()
+			warpByIP[ip] = results
+			mu.Unlock()
+		}(ip, index)
+	}
+	wg.Wait()
+	return directByIP, warpByIP
+}
+
 // startCheckPlaceViaPool builds a CheckPlace provider routed through the first
 // healthy proxy in the pool that can reach ipinfo.check.place without a
 // Cloudflare block. It returns nil if no proxy works or the feature is off.
@@ -719,6 +826,8 @@ func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
 			WarpHealthy:    entry.WarpHealthy,
 			Intel:         cloneIntel(entry.Intel),
 			WarpIntel:     cloneIntel(entry.WarpIntel),
+			Services:      append([]servicecheck.Result(nil), entry.Services...),
+			WarpServices:  append([]servicecheck.Result(nil), entry.WarpServices...),
 		}
 	}
 	return result
