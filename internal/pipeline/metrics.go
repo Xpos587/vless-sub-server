@@ -49,7 +49,38 @@ func (p *Pipeline) buildMetricsSnapshot(at time.Time, attributions []SourceAttri
 		}
 	}
 
-	return &metrics.Snapshot{At: at, Sources: series}
+	stats := metrics.IPIntelStats{
+		TypeCounts: map[string]int{},
+		RiskCounts: map[string]int{},
+		FlagCounts: map[string]int{},
+	}
+	for _, entry := range cached {
+		if entry.Intel == nil {
+			continue
+		}
+		stats.TypeCounts[entry.Intel.Type]++
+		stats.RiskCounts[entry.Intel.RiskLevel]++
+		if entry.Intel.Flags.Proxy {
+			stats.FlagCounts["proxy"]++
+		}
+		if entry.Intel.Flags.VPN {
+			stats.FlagCounts["vpn"]++
+		}
+		if entry.Intel.Flags.Tor {
+			stats.FlagCounts["tor"]++
+		}
+		if entry.Intel.Flags.Abuser {
+			stats.FlagCounts["abuser"]++
+		}
+		if entry.Intel.Flags.Datacenter {
+			stats.FlagCounts["datacenter"]++
+		}
+		if entry.Intel.Flags.Crawler {
+			stats.FlagCounts["crawler"]++
+		}
+	}
+
+	return &metrics.Snapshot{At: at, Sources: series, IPIntel: stats}
 }
 
 // exitCountry picks the country a WARP-chain user actually exits from,

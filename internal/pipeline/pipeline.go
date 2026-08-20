@@ -3,6 +3,9 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/netip"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -16,6 +19,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/fetch"
 	"github.com/michael/vless-sub-server/internal/format"
 	"github.com/michael/vless-sub-server/internal/geo"
+	"github.com/michael/vless-sub-server/internal/ipintel"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/quality"
 	"github.com/michael/vless-sub-server/internal/rename"
@@ -35,6 +39,8 @@ type CachedEntry struct {
 	Countries     country.RouteCountries
 	DirectHealthy bool
 	WarpHealthy   bool
+	Intel         *ipintel.Intel
+	WarpIntel     *ipintel.Intel
 }
 
 type outputEntry struct {
@@ -43,6 +49,8 @@ type outputEntry struct {
 	WarpGeo   *geo.GeoInfo
 	IsLAN     bool
 	Countries country.RouteCountries
+	Intel     *ipintel.Intel
+	WarpIntel *ipintel.Intel
 }
 
 type RefreshResult struct {
@@ -69,6 +77,7 @@ type Pipeline struct {
 	cache        atomic.Value // stores *CachedData
 	metrics      atomic.Value // stores *metrics.Snapshot
 	refreshMu    sync.Mutex   // Refresh and country-only reprobes share mutable runtime state.
+	ipintel      *ipintel.Aggregator
 }
 
 const (
@@ -78,7 +87,17 @@ const (
 
 func New(cfg *config.Config, dnsCache *dns.DNSCache) *Pipeline {
 	state, _ := country.OpenStateStore("")
-	return &Pipeline{cfg: cfg, dnsCache: dnsCache, sourceCache: fetch.NewSourceCache(), runtime: quality.NewStore(), countryState: state}
+	p := &Pipeline{cfg: cfg, dnsCache: dnsCache, sourceCache: fetch.NewSourceCache(), runtime: quality.NewStore(), countryState: state}
+	if cfg.IPIntelEnabled {
+		providers := ipintel.DefaultProviders(cfg.IPIntelTimeout)
+		if cfg.IPIntelCheckPlace && cfg.IPIntelProxyURL != "" {
+			if transport, err := fetch.Socks5Transport(cfg.IPIntelProxyURL, cfg.IPIntelTimeout); err == nil {
+				providers = append(providers, ipintel.NewCheckPlace(&http.Client{Transport: transport, Timeout: cfg.IPIntelTimeout}))
+			}
+		}
+		p.ipintel = ipintel.NewAggregator(providers, cfg.IPIntelCacheTTL)
+	}
+	return p
 }
 
 // LoadCountryState enables durable country evidence before the first refresh.
@@ -201,7 +220,8 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 		}
 	}
 
-	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, &result)
+	intelByIP := p.enrichExitIntel(ctx, probed, probes)
+	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, &result)
 	hasExisting := p.cache.Load() != nil
 	if !CanPublish(len(entries), hasExisting) {
 		return result
@@ -242,7 +262,15 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	warpEntries := make([]rename.RenamedEntry, 0, len(renamed))
 	for i, entry := range renamed {
 		runtime, _ := p.runtime.Get(identity(entries[i].Record))
-		cachedEntries[i] = CachedEntry{Entry: cloneRenamedEntry(entry), WarpEntry: cloneRenamedEntry(warpRenamed[i]), Countries: entries[i].Countries, DirectHealthy: runtime.DirectHealthy, WarpHealthy: runtime.WarpHealthy}
+		cachedEntries[i] = CachedEntry{
+			Entry:         cloneRenamedEntry(entry),
+			WarpEntry:     cloneRenamedEntry(warpRenamed[i]),
+			Countries:     entries[i].Countries,
+			DirectHealthy: runtime.DirectHealthy,
+			WarpHealthy:   runtime.WarpHealthy,
+			Intel:         cloneIntel(entries[i].Intel),
+			WarpIntel:     cloneIntel(entries[i].WarpIntel),
+		}
 		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entry)
 		}
@@ -433,16 +461,17 @@ func (p *Pipeline) markBandwidthAttempt(key string, now time.Time) {
 	p.runtime.Set(runtime)
 }
 
-func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, result *RefreshResult) ([]outputEntry, int) {
+func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, result *RefreshResult) ([]outputEntry, int) {
 	type item struct {
 		record  parse.ProxyRecord
 		runtime quality.Runtime
 		geo     *geo.GeoInfo
 		lan     bool
+		probe   *exitprobe.ExitProbeResult
 	}
 	items := make([]item, 0, len(records))
 	geoAvailable := 0
-	for _, record := range records {
+	for i, record := range records {
 		runtime, ok := p.runtime.Get(identity(record))
 		if !ok || runtime.State == quality.Dead {
 			result.Dead++
@@ -460,7 +489,7 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 		if info != nil {
 			geoAvailable++
 		}
-		items = append(items, item{record, runtime, info, dnsMap[record.Host].IsPrivate})
+		items = append(items, item{record, runtime, info, dnsMap[record.Host].IsPrivate, probes[i]})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		left, right := items[i].runtime, items[j].runtime
@@ -471,7 +500,24 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 	})
 	entries := make([]outputEntry, 0, len(items))
 	for _, item := range items {
-		entries = append(entries, outputEntry{Record: item.record, Geo: item.geo, WarpGeo: cloneGeo(item.runtime.WarpGeoInfo), IsLAN: item.lan, Countries: item.runtime.Countries})
+		var intel, warpIntel *ipintel.Intel
+		if item.probe != nil {
+			if item.probe.DirectCountry.Valid() {
+				intel = intelByIP[item.probe.DirectCountry.IP.String()]
+			}
+			if item.probe.WarpCountry.Valid() {
+				warpIntel = intelByIP[item.probe.WarpCountry.IP.String()]
+			}
+		}
+		entries = append(entries, outputEntry{
+			Record:    item.record,
+			Geo:       item.geo,
+			WarpGeo:   cloneGeo(item.runtime.WarpGeoInfo),
+			IsLAN:     item.lan,
+			Countries: item.runtime.Countries,
+			Intel:     intel,
+			WarpIntel: warpIntel,
+		})
 	}
 	return entries, geoAvailable
 }
@@ -528,10 +574,152 @@ func cloneGeo(info *geo.GeoInfo) *geo.GeoInfo {
 	return &copy
 }
 
+func cloneIntel(info *ipintel.Intel) *ipintel.Intel {
+	if info == nil {
+		return nil
+	}
+	copy := *info
+	if info.Sources != nil {
+		copy.Sources = append([]string(nil), info.Sources...)
+	}
+	return &copy
+}
+
+// enrichExitIntel looks up reputation for each unique direct and WARP exit IP.
+// It is a no-op when IP intelligence is disabled. The returned map is keyed by
+// exit IP string; callers attribute it to direct or WARP routes by probe IP.
+func (p *Pipeline) enrichExitIntel(ctx context.Context, records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult) map[string]*ipintel.Intel {
+	byIP := make(map[string]*ipintel.Intel)
+	if p.ipintel == nil {
+		return byIP
+	}
+	unique := make(map[string]netip.Addr)
+	for _, probe := range probes {
+		if probe == nil {
+			continue
+		}
+		if probe.DirectCountry.Valid() {
+			unique[probe.DirectCountry.IP.String()] = probe.DirectCountry.IP
+		}
+		if probe.WarpCountry.Valid() {
+			unique[probe.WarpCountry.IP.String()] = probe.WarpCountry.IP
+		}
+	}
+	if len(unique) == 0 {
+		return byIP
+	}
+	sem := make(chan struct{}, p.cfg.IPIntelMaxConcurrent)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ip := range unique {
+		wg.Add(1)
+		go func(ip netip.Addr) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			intel, ok := p.ipintel.Lookup(ctx, ip)
+			if !ok {
+				return
+			}
+			mu.Lock()
+			byIP[ip.String()] = &intel
+			mu.Unlock()
+		}(ip)
+	}
+	wg.Wait()
+	if cp := p.startCheckPlaceViaPool(ctx, records, probes); cp != nil {
+		var cpMu sync.Mutex
+		var cpWg sync.WaitGroup
+		cpSem := make(chan struct{}, p.cfg.IPIntelMaxConcurrent)
+		for _, ip := range unique {
+			cpWg.Add(1)
+			go func(ip netip.Addr) {
+				defer cpWg.Done()
+				select {
+				case cpSem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-cpSem }()
+				result, ok := cp.Lookup(ctx, ip)
+				if !ok {
+					return
+				}
+				cpMu.Lock()
+				defer cpMu.Unlock()
+				if existing, found := byIP[ip.String()]; found {
+					merged := ipintel.MergeResult(*existing, result)
+					byIP[ip.String()] = &merged
+				} else {
+					intel := ipintel.MergeResult(ipintel.Intel{}, result)
+					byIP[ip.String()] = &intel
+				}
+			}(ip)
+		}
+		cpWg.Wait()
+	}
+	return byIP
+}
+
+// startCheckPlaceViaPool builds a CheckPlace provider routed through the first
+// healthy proxy in the pool that can reach ipinfo.check.place without a
+// Cloudflare block. It returns nil if no proxy works or the feature is off.
+func (p *Pipeline) startCheckPlaceViaPool(ctx context.Context, records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult) *ipintel.CheckPlace {
+	if !p.cfg.IPIntelCheckPlace {
+		return nil
+	}
+	healthy := make([]parse.ProxyRecord, 0, 8)
+	for i, record := range records {
+		if probe := probes[i]; probe != nil && probe.Metrics.InternetReachable {
+			healthy = append(healthy, record)
+			if len(healthy) >= 8 {
+				break
+			}
+		}
+	}
+	if len(healthy) == 0 {
+		return nil
+	}
+	gateway, err := exitprobe.StartFetchGateway(healthy)
+	if err != nil {
+		return nil
+	}
+	for index := range healthy {
+		tag := fmt.Sprintf("gateway_%d_out", index)
+		transport := &http.Transport{
+			DialContext:           gateway.DialContext(tag),
+			TLSHandshakeTimeout:   p.cfg.IPIntelTimeout,
+			ResponseHeaderTimeout: p.cfg.IPIntelTimeout,
+		}
+		client := &http.Client{Transport: transport, Timeout: p.cfg.IPIntelTimeout}
+		cp := ipintel.NewCheckPlace(client)
+		probeCtx, cancel := context.WithTimeout(ctx, p.cfg.IPIntelTimeout)
+		_, ok := cp.Lookup(probeCtx, netip.MustParseAddr("8.8.8.8"))
+		cancel()
+		if ok {
+			return cp
+		}
+	}
+	gateway.Close()
+	return nil
+}
+
 func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
 	result := make([]CachedEntry, len(entries))
 	for i, entry := range entries {
-		result[i] = CachedEntry{Entry: cloneRenamedEntry(entry.Entry), WarpEntry: cloneRenamedEntry(entry.WarpEntry), Countries: entry.Countries, DirectHealthy: entry.DirectHealthy, WarpHealthy: entry.WarpHealthy}
+		result[i] = CachedEntry{
+			Entry:         cloneRenamedEntry(entry.Entry),
+			WarpEntry:     cloneRenamedEntry(entry.WarpEntry),
+			Countries:     entry.Countries,
+			DirectHealthy: entry.DirectHealthy,
+			WarpHealthy:    entry.WarpHealthy,
+			Intel:         cloneIntel(entry.Intel),
+			WarpIntel:     cloneIntel(entry.WarpIntel),
+		}
 	}
 	return result
 }

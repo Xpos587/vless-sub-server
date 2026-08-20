@@ -40,6 +40,12 @@ type Config struct {
 	MetricsPort            int           `env:"METRICS_PORT" envDefault:"9090"`
 	FetchProxyFallback     bool          `env:"FETCH_PROXY_FALLBACK" envDefault:"true"`
 	SourceFetchProxies     []string      `env:"SOURCE_FETCH_PROXIES" envSeparator:","`
+	IPIntelEnabled         bool          `env:"IP_INTEL_ENABLED" envDefault:"true"`
+	IPIntelTimeout         time.Duration `env:"IP_INTEL_TIMEOUT" envDefault:"8s"`
+	IPIntelCacheTTL        time.Duration `env:"IP_INTEL_CACHE_TTL" envDefault:"6h"`
+	IPIntelMaxConcurrent   int           `env:"IP_INTEL_MAX_CONCURRENT" envDefault:"8"`
+	IPIntelCheckPlace      bool          `env:"IP_INTEL_CHECK_PLACE" envDefault:"false"`
+	IPIntelProxyURL        string        `env:"IP_INTEL_PROXY_URL"`
 }
 
 func Load() (*Config, error) {
@@ -63,6 +69,10 @@ func Load() (*Config, error) {
 		ExitObserverURL:        "https://exit-observer.hypcat.net/_exit",
 		MaxConcurrent:          50,
 		GeoDatDir:              "/usr/local/share/xray",
+		IPIntelEnabled:         true,
+		IPIntelTimeout:         8 * time.Second,
+		IPIntelCacheTTL:        6 * time.Hour,
+		IPIntelMaxConcurrent:   8,
 	}
 	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
 		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
@@ -85,6 +95,26 @@ func Load() (*Config, error) {
 	}
 	if raw := os.Getenv("SOURCE_FETCH_PROXIES"); raw != "" {
 		c.SourceFetchProxies = strings.Split(raw, ",")
+	}
+	if raw := os.Getenv("IP_INTEL_ENABLED"); raw != "" {
+		if c.IPIntelEnabled, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("IP_INTEL_ENABLED: %w", err)
+		}
+	}
+	if c.IPIntelTimeout, err = durationEnv("IP_INTEL_TIMEOUT", c.IPIntelTimeout); err != nil || c.IPIntelTimeout <= 0 {
+		return nil, fmt.Errorf("IP_INTEL_TIMEOUT must be positive")
+	}
+	if c.IPIntelCacheTTL, err = durationEnv("IP_INTEL_CACHE_TTL", c.IPIntelCacheTTL); err != nil || c.IPIntelCacheTTL <= 0 {
+		return nil, fmt.Errorf("IP_INTEL_CACHE_TTL must be positive")
+	}
+	if c.IPIntelMaxConcurrent, err = intEnv("IP_INTEL_MAX_CONCURRENT", c.IPIntelMaxConcurrent); err != nil || c.IPIntelMaxConcurrent < 1 {
+		return nil, fmt.Errorf("IP_INTEL_MAX_CONCURRENT must be positive")
+	}
+	c.IPIntelProxyURL = os.Getenv("IP_INTEL_PROXY_URL")
+	if raw := os.Getenv("IP_INTEL_CHECK_PLACE"); raw != "" {
+		if c.IPIntelCheckPlace, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("IP_INTEL_CHECK_PLACE: %w", err)
+		}
 	}
 	if c.MaxConcurrent, err = intEnv("MAX_CONCURRENT", c.MaxConcurrent); err != nil || c.MaxConcurrent < 1 {
 		return nil, fmt.Errorf("MAX_CONCURRENT must be positive")
