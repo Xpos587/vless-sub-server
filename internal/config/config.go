@@ -49,6 +49,9 @@ type Config struct {
 	ServiceCheckEnabled    bool          `env:"SERVICE_CHECK_ENABLED" envDefault:"false"`
 	ServiceCheckTimeout    time.Duration `env:"SERVICE_CHECK_TIMEOUT" envDefault:"10s"`
 	ServiceCheckMaxConcurrent int       `env:"SERVICE_CHECK_MAX_CONCURRENT" envDefault:"4"`
+	ServiceCheckInterval      time.Duration `env:"SERVICE_CHECK_INTERVAL" envDefault:"10m"`
+	ServiceCheckBatchSize     int           `env:"SERVICE_CHECK_BATCH_SIZE" envDefault:"20"`
+	ServiceCheckCacheTTL      time.Duration `env:"SERVICE_CHECK_CACHE_TTL" envDefault:"2h"`
 	PortCheckEnabled         bool          `env:"PORT_CHECK_ENABLED" envDefault:"false"`
 	PortCheckTimeout         time.Duration `env:"PORT_CHECK_TIMEOUT" envDefault:"3s"`
 	PortCheckMaxConcurrent   int           `env:"PORT_CHECK_MAX_CONCURRENT" envDefault:"4"`
@@ -85,6 +88,9 @@ func Load() (*Config, error) {
 		ServiceCheckEnabled:    false,
 		ServiceCheckTimeout:    10 * time.Second,
 		ServiceCheckMaxConcurrent: 4,
+		ServiceCheckInterval:      10 * time.Minute,
+		ServiceCheckBatchSize:     20,
+		ServiceCheckCacheTTL:      2 * time.Hour,
 		PortCheckEnabled:         false,
 		PortCheckTimeout:         3 * time.Second,
 		PortCheckMaxConcurrent:   4,
@@ -139,6 +145,15 @@ func Load() (*Config, error) {
 	}
 	if c.ServiceCheckMaxConcurrent, err = intEnv("SERVICE_CHECK_MAX_CONCURRENT", c.ServiceCheckMaxConcurrent); err != nil || c.ServiceCheckMaxConcurrent < 1 {
 		return nil, fmt.Errorf("SERVICE_CHECK_MAX_CONCURRENT must be positive")
+	}
+	if c.ServiceCheckInterval, err = durationEnv("SERVICE_CHECK_INTERVAL", c.ServiceCheckInterval); err != nil || c.ServiceCheckInterval <= 0 {
+		return nil, fmt.Errorf("SERVICE_CHECK_INTERVAL must be positive")
+	}
+	if c.ServiceCheckBatchSize, err = intEnv("SERVICE_CHECK_BATCH_SIZE", c.ServiceCheckBatchSize); err != nil || c.ServiceCheckBatchSize < 1 {
+		return nil, fmt.Errorf("SERVICE_CHECK_BATCH_SIZE must be positive")
+	}
+	if c.ServiceCheckCacheTTL, err = durationEnv("SERVICE_CHECK_CACHE_TTL", c.ServiceCheckCacheTTL); err != nil || c.ServiceCheckCacheTTL <= 0 {
+		return nil, fmt.Errorf("SERVICE_CHECK_CACHE_TTL must be positive")
 	}
 	if raw := os.Getenv("PORT_CHECK_ENABLED"); raw != "" {
 		if c.PortCheckEnabled, err = strconv.ParseBool(raw); err != nil {

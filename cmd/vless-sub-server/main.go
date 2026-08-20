@@ -26,6 +26,7 @@ const initWaitTimeout = 5 * time.Second
 var (
 	refreshing       atomic.Int32 // 0=idle, 1=refreshing
 	countryReprobing atomic.Int32 // 0=idle, 1=reprobing final WARP countries
+	serviceChecking  atomic.Int32 // 0=idle, 1=running service availability checks
 	cfg              *config.Config
 	service          *pipeline.Pipeline
 )
@@ -69,6 +70,14 @@ func main() {
 			triggerCountryReprobe()
 		}
 	}()
+	if cfg.ServiceCheckEnabled {
+		serviceTicker := time.NewTicker(cfg.ServiceCheckInterval)
+		go func() {
+			for range serviceTicker.C {
+				triggerServiceChecks()
+			}
+		}()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", noindex(handleSub))
@@ -172,6 +181,25 @@ func triggerCountryReprobe() {
 		defer cancel()
 		result := service.ReprobeWarpCountries(ctx)
 		log.Printf("[country-reprobe] done in %s: candidates=%d updated=%d country_warp=%v country_state_save_failed=%t", time.Since(start), result.Candidates, result.Updated, result.WarpCountrySources, result.CountryStateSaveFailed)
+	}()
+}
+
+func triggerServiceChecks() {
+	if !serviceChecking.CompareAndSwap(0, 1) {
+		return
+	}
+	go func() {
+		defer serviceChecking.Store(0)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[service-check] panic recovered: %v", r)
+			}
+		}()
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		result := service.RunServiceChecks(ctx)
+		log.Printf("[service-check] done in %s: candidates=%d checked=%d cached=%d", time.Since(start), result.Candidates, result.Checked, result.CachedHits)
 	}()
 }
 

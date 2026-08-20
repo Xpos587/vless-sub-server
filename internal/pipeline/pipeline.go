@@ -93,6 +93,7 @@ type Pipeline struct {
 	metrics      atomic.Value // stores *metrics.Snapshot
 	refreshMu    sync.Mutex   // Refresh and country-only reprobes share mutable runtime state.
 	ipintel      *ipintel.Aggregator
+	serviceCache *servicecheck.Cache
 }
 
 const (
@@ -111,6 +112,9 @@ func New(cfg *config.Config, dnsCache *dns.DNSCache) *Pipeline {
 			}
 		}
 		p.ipintel = ipintel.NewAggregator(providers, cfg.IPIntelCacheTTL)
+	}
+	if cfg.ServiceCheckEnabled {
+		p.serviceCache = servicecheck.NewCache(cfg.ServiceCheckCacheTTL)
 	}
 	return p
 }
@@ -236,10 +240,9 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	}
 
 	intelByIP := p.enrichExitIntel(ctx, probed, probes)
-	serviceByIP, warpServiceByIP := p.checkServices(ctx, ep, probed, probes)
 	portByIP := p.checkPorts(ctx, probes)
 	dnsblByIP := p.checkDNSBL(ctx, probes)
-	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, serviceByIP, warpServiceByIP, portByIP, dnsblByIP, &result)
+	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, portByIP, dnsblByIP, &result)
 	hasExisting := p.cache.Load() != nil
 	if !CanPublish(len(entries), hasExisting) {
 		return result
@@ -485,7 +488,7 @@ func (p *Pipeline) markBandwidthAttempt(key string, now time.Time) {
 	p.runtime.Set(runtime)
 }
 
-func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, serviceByIP, warpServiceByIP map[string][]servicecheck.Result, portByIP map[string][]portcheck.PortResult, dnsblByIP map[string][]dnsbl.Result, result *RefreshResult) ([]outputEntry, int) {
+func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, portByIP map[string][]portcheck.PortResult, dnsblByIP map[string][]dnsbl.Result, result *RefreshResult) ([]outputEntry, int) {
 	type item struct {
 		record  parse.ProxyRecord
 		runtime quality.Runtime
@@ -529,8 +532,8 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			geo:          info,
 			lan:          dnsMap[record.Host].IsPrivate,
 			probe:        probe,
-			services:     serviceByIP[directIP(probe)],
-			warpServices: warpServiceByIP[warpIP(probe)],
+			services:     p.serviceResults(directIP(probe)),
+			warpServices: p.serviceResults(warpIP(probe)),
 			ports:        portByIP[directIP(probe)],
 			warpPorts:    portByIP[warpIP(probe)],
 			dnsbl:        dnsblByIP[directIP(probe)],
@@ -642,6 +645,19 @@ func directIP(probe *exitprobe.ExitProbeResult) string {
 		return probe.DirectCountry.IP.String()
 	}
 	return ""
+}
+
+// serviceResults returns cached service-check results for an exit IP, or nil
+// if service checks are disabled or no results are cached yet.
+func (p *Pipeline) serviceResults(ip string) []servicecheck.Result {
+	if p.serviceCache == nil || ip == "" {
+		return nil
+	}
+	results, ok := p.serviceCache.Get(ip)
+	if !ok {
+		return nil
+	}
+	return results
 }
 
 func warpIP(probe *exitprobe.ExitProbeResult) string {
@@ -772,40 +788,77 @@ func (p *Pipeline) checkDNSBL(ctx context.Context, probes map[int]*exitprobe.Exi
 	wg.Wait()
 	return byIP
 }
-// checkServices runs service availability probes through the exact proxy and
-// WARP outbound tags. It deduplicates by exit IP to avoid probing the same
-// egress multiple times.
-func (p *Pipeline) checkServices(ctx context.Context, ep *exitprobe.ExitProber, records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult) (map[string][]servicecheck.Result, map[string][]servicecheck.Result) {
-	directByIP := make(map[string][]servicecheck.Result)
-	warpByIP := make(map[string][]servicecheck.Result)
-	if !p.cfg.ServiceCheckEnabled || ep == nil {
-		return directByIP, warpByIP
+// ServiceCheckResult reports the outcome of a background service-check batch.
+type ServiceCheckResult struct {
+	Candidates   int
+	Checked      int
+	CachedHits   int
+}
+
+// RunServiceChecks probes service availability for a batch of stale exit IPs.
+// It runs in its own ticker, outside the refresh context, and caches results
+// by IP so repeat IPs are not re-checked every cycle.
+func (p *Pipeline) RunServiceChecks(ctx context.Context) ServiceCheckResult {
+	result := ServiceCheckResult{}
+	if p.serviceCache == nil {
+		return result
 	}
+	cached, ok := p.Cached()
+	if !ok {
+		return result
+	}
+	type ipInfo struct {
+		record parse.ProxyRecord
+		route  string
+	}
+	unique := make(map[string]ipInfo)
+	for _, entry := range cached.Entries {
+		if entry.DirectHealthy {
+			if ip := directExitIP(entry.Countries); ip != "" {
+				unique[ip] = ipInfo{entry.Entry.Record, "direct"}
+			}
+		}
+		if entry.WarpHealthy {
+			if ip := warpExitIP(entry.Countries); ip != "" {
+				if _, exists := unique[ip]; !exists {
+					unique[ip] = ipInfo{entry.Entry.Record, "warp"}
+				}
+			}
+		}
+	}
+	ips := make([]string, 0, len(unique))
+	for ip := range unique {
+		ips = append(ips, ip)
+	}
+	result.Candidates = len(ips)
+	stale := p.serviceCache.StaleIPs(ips)
+	result.CachedHits = len(ips) - len(stale)
+	if len(stale) > p.cfg.ServiceCheckBatchSize {
+		stale = stale[:p.cfg.ServiceCheckBatchSize]
+	}
+	if len(stale) == 0 {
+		return result
+	}
+	records := make([]parse.ProxyRecord, 0, len(stale))
+	ipToIndex := make(map[string]int, len(stale))
+	ipToRoute := make(map[string]string, len(stale))
+	for _, ip := range stale {
+		ipToIndex[ip] = len(records)
+		records = append(records, unique[ip].record)
+		ipToRoute[ip] = unique[ip].route
+	}
+	ep := exitprobe.NewExitProber(p.cfg)
+	if ep.StartWithProxies(records) != nil {
+		return result
+	}
+	defer ep.Stop()
 	checkers := servicecheck.DefaultCheckers()
 	timeout := p.cfg.ServiceCheckTimeout
-
-	directUnique := make(map[string]int)
-	warpUnique := make(map[string]int)
-	for i := range records {
-		probe := probes[i]
-		if probe == nil {
-			continue
-		}
-		if probe.Metrics.InternetReachable && probe.DirectCountry.Valid() {
-			directUnique[probe.DirectCountry.IP.String()] = i
-		}
-		if probe.WarpCountry.Valid() {
-			warpUnique[probe.WarpCountry.IP.String()] = i
-		}
-	}
-
 	sem := make(chan struct{}, p.cfg.ServiceCheckMaxConcurrent)
-	var mu sync.Mutex
 	var wg sync.WaitGroup
-
-	for ip, index := range directUnique {
+	for _, ip := range stale {
 		wg.Add(1)
-		go func(ip string, index int) {
+		go func(ip string) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
@@ -813,32 +866,40 @@ func (p *Pipeline) checkServices(ctx context.Context, ep *exitprobe.ExitProber, 
 				return
 			}
 			defer func() { <-sem }()
-			tag := fmt.Sprintf("proxy_%d_out", index)
-			results := servicecheck.CheckAll(ctx, ep.HTTPClient(tag, timeout), checkers)
-			mu.Lock()
-			directByIP[ip] = results
-			mu.Unlock()
-		}(ip, index)
-	}
-	for ip, index := range warpUnique {
-		wg.Add(1)
-		go func(ip string, index int) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				return
+			index := ipToIndex[ip]
+			var tag string
+			if ipToRoute[ip] == "warp" {
+				tag = fmt.Sprintf("warp_%d_out", index)
+			} else {
+				tag = fmt.Sprintf("proxy_%d_out", index)
 			}
-			defer func() { <-sem }()
-			tag := fmt.Sprintf("warp_%d_out", index)
 			results := servicecheck.CheckAll(ctx, ep.HTTPClient(tag, timeout), checkers)
-			mu.Lock()
-			warpByIP[ip] = results
-			mu.Unlock()
-		}(ip, index)
+			p.serviceCache.Set(ip, results)
+		}(ip)
 	}
 	wg.Wait()
-	return directByIP, warpByIP
+	result.Checked = len(stale)
+	return result
+}
+
+func directExitIP(countries country.RouteCountries) string {
+	if countries.DirectV4.Available && countries.DirectV4.IP.IsValid() {
+		return countries.DirectV4.IP.Unmap().String()
+	}
+	if countries.DirectV6.Available && countries.DirectV6.IP.IsValid() {
+		return countries.DirectV6.IP.Unmap().String()
+	}
+	return ""
+}
+
+func warpExitIP(countries country.RouteCountries) string {
+	if countries.WarpV4.Available && countries.WarpV4.IP.IsValid() {
+		return countries.WarpV4.IP.Unmap().String()
+	}
+	if countries.WarpV6.Available && countries.WarpV6.IP.IsValid() {
+		return countries.WarpV6.IP.Unmap().String()
+	}
+	return ""
 }
 
 // checkPorts probes a small set of TCP ports on each unique exit IP. It is
