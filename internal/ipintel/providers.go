@@ -22,6 +22,7 @@ func DefaultProviders(timeout time.Duration) []Provider {
 		newIPinfoDemo(timeout),
 		newIPAPI(timeout),
 		newIPSB(timeout),
+		newCymru(timeout),
 	}
 }
 

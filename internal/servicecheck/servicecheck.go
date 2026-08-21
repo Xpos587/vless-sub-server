@@ -37,7 +37,7 @@ const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 
 // DefaultCheckers returns the service probes in display order.
 func DefaultCheckers() []Checker {
-	return []Checker{
+	out := []Checker{
 		chatGPTWeb{},
 		chatGPTApp{},
 		gemini{},
@@ -49,6 +49,9 @@ func DefaultCheckers() []Checker {
 		reddit{},
 		amazonPrime{},
 	}
+	out = append(out, AICheckers()...)
+	out = append(out, MoreCheckers()...)
+	return out
 }
 
 // CheckAll runs all checkers sequentially through client.

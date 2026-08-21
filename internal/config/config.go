@@ -58,6 +58,8 @@ type Config struct {
 	DNSBLEnabled             bool          `env:"DNSBL_ENABLED" envDefault:"false"`
 	DNSBLTimeout             time.Duration `env:"DNSBL_TIMEOUT" envDefault:"3s"`
 	DNSBLMaxConcurrent       int           `env:"DNSBL_MAX_CONCURRENT" envDefault:"4"`
+	ProxyCheckEnabled       bool          `env:"PROXYCHECK_ENABLED" envDefault:"false"`
+	ProxyCheckTimeout       time.Duration `env:"PROXYCHECK_TIMEOUT" envDefault:"10s"`
 }
 
 func Load() (*Config, error) {
@@ -97,6 +99,8 @@ func Load() (*Config, error) {
 		DNSBLEnabled:             false,
 		DNSBLTimeout:             3 * time.Second,
 		DNSBLMaxConcurrent:       4,
+		ProxyCheckEnabled:       false,
+		ProxyCheckTimeout:       10 * time.Second,
 	}
 	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
 		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
@@ -176,6 +180,14 @@ func Load() (*Config, error) {
 	}
 	if c.DNSBLMaxConcurrent, err = intEnv("DNSBL_MAX_CONCURRENT", c.DNSBLMaxConcurrent); err != nil || c.DNSBLMaxConcurrent < 1 {
 		return nil, fmt.Errorf("DNSBL_MAX_CONCURRENT must be positive")
+	}
+	if raw := os.Getenv("PROXYCHECK_ENABLED"); raw != "" {
+		if c.ProxyCheckEnabled, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("PROXYCHECK_ENABLED: %w", err)
+		}
+	}
+	if c.ProxyCheckTimeout, err = durationEnv("PROXYCHECK_TIMEOUT", c.ProxyCheckTimeout); err != nil || c.ProxyCheckTimeout <= 0 {
+		return nil, fmt.Errorf("PROXYCHECK_TIMEOUT must be positive")
 	}
 	if raw := os.Getenv("IP_INTEL_CHECK_PLACE"); raw != "" {
 		if c.IPIntelCheckPlace, err = strconv.ParseBool(raw); err != nil {

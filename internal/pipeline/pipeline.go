@@ -744,6 +744,38 @@ func (p *Pipeline) enrichExitIntel(ctx context.Context, records []parse.ProxyRec
 		}
 		cpWg.Wait()
 	}
+	if pc, cleanup := p.startProxyCheckViaPool(ctx, records, probes); pc != nil {
+		defer cleanup()
+		var pcMu sync.Mutex
+		var pcWg sync.WaitGroup
+		pcSem := make(chan struct{}, p.cfg.IPIntelMaxConcurrent)
+		for _, ip := range unique {
+			pcWg.Add(1)
+			go func(ip netip.Addr) {
+				defer pcWg.Done()
+				select {
+				case pcSem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-pcSem }()
+				result, ok := pc.Lookup(ctx, ip)
+				if !ok {
+					return
+				}
+				pcMu.Lock()
+				defer pcMu.Unlock()
+				if existing, found := byIP[ip.String()]; found {
+					merged := ipintel.MergeResult(*existing, result)
+					byIP[ip.String()] = &merged
+				} else {
+					intel := ipintel.MergeResult(ipintel.Intel{}, result)
+					byIP[ip.String()] = &intel
+				}
+			}(ip)
+		}
+		pcWg.Wait()
+	}
 	return byIP
 }
 
@@ -1027,4 +1059,45 @@ func cloneRenamedEntry(entry rename.RenamedEntry) rename.RenamedEntry {
 		copy.Record.QueryParams[key] = value
 	}
 	return copy
+}
+
+// startProxyCheckViaPool creates a ProxyCheck provider with HTTP clients
+// routed through the proxy pool. It returns a cleanup func that closes the
+// gateway; callers must defer it. Returns nil if disabled or no healthy proxy.
+func (p *Pipeline) startProxyCheckViaPool(ctx context.Context, records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult) (*ipintel.ProxyCheck, func()) {
+	if !p.cfg.ProxyCheckEnabled {
+		return nil, nil
+	}
+	healthy := make([]parse.ProxyRecord, 0, 8)
+	for i, record := range records {
+		if probe := probes[i]; probe != nil && probe.Metrics.InternetReachable {
+			healthy = append(healthy, record)
+			if len(healthy) >= 8 {
+				break
+			}
+		}
+	}
+	if len(healthy) == 0 {
+		return nil, nil
+	}
+	gateway, err := exitprobe.StartFetchGateway(healthy)
+	if err != nil {
+		return nil, nil
+	}
+	clients := make([]*http.Client, 0, len(healthy))
+	for i := range healthy {
+		tag := fmt.Sprintf("gateway_%d_out", i)
+		transport := &http.Transport{
+			DialContext:           gateway.DialContext(tag),
+			TLSHandshakeTimeout:   p.cfg.ProxyCheckTimeout,
+			ResponseHeaderTimeout: p.cfg.ProxyCheckTimeout,
+		}
+		clients = append(clients, &http.Client{Transport: transport, Timeout: p.cfg.ProxyCheckTimeout})
+	}
+	pc := ipintel.NewProxyCheck(clients, p.cfg.ProxyCheckTimeout)
+	if pc == nil {
+		gateway.Close()
+		return nil, nil
+	}
+	return pc, func() { gateway.Close() }
 }
