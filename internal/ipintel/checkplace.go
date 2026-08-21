@@ -37,6 +37,13 @@ func NewCheckPlace(client *http.Client) *CheckPlace {
 
 func (p *CheckPlace) Name() string { return "check.place" }
 
+// Probe performs one lightweight database query to determine whether the
+// wrapper is reachable through a candidate proxy exit.
+func (p *CheckPlace) Probe(ctx context.Context, ip netip.Addr) bool {
+	_, ok := p.lookupDB(ctx, ip, "ip2location")
+	return ok
+}
+
 func (p *CheckPlace) Lookup(ctx context.Context, ip netip.Addr) (Result, bool) {
 	var mu sync.Mutex
 	results := make([]Result, 0, len(p.databases))
@@ -93,9 +100,9 @@ func (p *CheckPlace) lookupDB(ctx context.Context, ip netip.Addr, db string) (Re
 func parseAbuseIPDB(body []byte) (Result, bool) {
 	var response struct {
 		Data struct {
-			UsageType             string `json:"usageType"`
-			AbuseConfidenceScore  int    `json:"abuseConfidenceScore"`
-			CountryCode           string `json:"countryCode"`
+			UsageType            string `json:"usageType"`
+			AbuseConfidenceScore int    `json:"abuseConfidenceScore"`
+			CountryCode          string `json:"countryCode"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(body, &response) != nil {
@@ -136,8 +143,8 @@ func abuseIPDBUsageType(usage string) string {
 
 func parseIP2Location(body []byte) (Result, bool) {
 	var response struct {
-		UsageType   string `json:"usage_type"`
-		AsInfo      struct {
+		UsageType string `json:"usage_type"`
+		AsInfo    struct {
 			AsUsageType string `json:"as_usage_type"`
 		} `json:"as_info"`
 		CountryCode string `json:"country_code"`

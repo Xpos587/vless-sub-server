@@ -48,6 +48,23 @@ func TestCheckPlaceLookup(t *testing.T) {
 	}
 }
 
+func TestCheckPlaceProbeUsesSingleDatabase(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("db") != "ip2location" {
+			t.Fatalf("probe db = %q", r.URL.Query().Get("db"))
+		}
+		_, _ = w.Write([]byte(`{"usage_type":"ISP","country_code":"US"}`))
+	}))
+	defer server.Close()
+	cp := NewCheckPlace(server.Client())
+	cp.endpoint = server.URL
+	if !cp.Probe(context.Background(), netip.MustParseAddr("8.8.8.8")) || requests != 1 {
+		t.Fatalf("probe requests = %d", requests)
+	}
+}
+
 func TestParseAbuseIPDB(t *testing.T) {
 	body := []byte(`{"data":{"usageType":"Mobile ISP","abuseConfidenceScore":25,"countryCode":"DE"}}`)
 	result, ok := parseAbuseIPDB(body)

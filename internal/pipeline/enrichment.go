@@ -215,7 +215,18 @@ func (p *Pipeline) startIntelPool(ctx context.Context, entries []CachedEntry, ne
 	checkPlaces := make([]*ipintel.CheckPlace, 0, len(clients))
 	if p.cfg.IPIntelCheckPlace {
 		for _, client := range clients {
-			checkPlaces = append(checkPlaces, ipintel.NewCheckPlace(client))
+			provider := ipintel.NewCheckPlace(client)
+			probeCtx, cancel := context.WithTimeout(ctx, p.cfg.IPIntelTimeout)
+			available := provider.Probe(probeCtx, netip.MustParseAddr("8.8.8.8"))
+			cancel()
+			outcome := ipintel.ProviderTransport
+			if available {
+				outcome = ipintel.ProviderSuccess
+				checkPlaces = append(checkPlaces, provider)
+			}
+			if p.ipintel != nil {
+				p.ipintel.RecordProvider(provider.Name(), outcome)
+			}
 		}
 	}
 	return proxyCheck, checkPlaces, gateway.Close
