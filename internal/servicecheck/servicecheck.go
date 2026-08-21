@@ -2,7 +2,9 @@ package servicecheck
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -23,7 +25,30 @@ type Result struct {
 	Service string
 	Status  Status
 	Region  string
+	Reason  string
 	Detail  string
+}
+
+func ResultReason(result Result) string {
+	if result.Status != Unknown {
+		return ""
+	}
+	if result.Reason != "" {
+		return result.Reason
+	}
+	detail := strings.ToLower(result.Detail)
+	switch {
+	case strings.Contains(detail, "challenge"):
+		return "challenge"
+	case strings.Contains(detail, "unexpected http"), strings.Contains(detail, "unexpected response"), strings.Contains(detail, "unexpected destination"):
+		return "unexpected_status"
+	case strings.Contains(detail, "not found"), strings.Contains(detail, "wording present"):
+		return "parse_error"
+	case strings.Contains(detail, "request failed"):
+		return "transport"
+	default:
+		return "unknown"
+	}
 }
 
 // Checker probes one service through a given HTTP client (routed through a
@@ -67,13 +92,14 @@ type fetchResult struct {
 	status   int
 	body     string
 	finalURL string
+	reason   string
 	ok       bool
 }
 
 func fetch(ctx context.Context, client *http.Client, url string, headers map[string]string) fetchResult {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fetchResult{}
+		return fetchResult{reason: "parse_error"}
 	}
 	req.Header.Set("User-Agent", browserUA)
 	for key, value := range headers {
@@ -81,18 +107,31 @@ func fetch(ctx context.Context, client *http.Client, url string, headers map[str
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fetchResult{}
+		reason := "transport"
+		var netErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout() {
+			reason = "timeout"
+		}
+		return fetchResult{reason: reason}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
-		return fetchResult{status: resp.StatusCode, ok: false}
+		return fetchResult{status: resp.StatusCode, reason: "parse_error", ok: false}
 	}
 	finalURL := ""
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
 	}
 	return fetchResult{status: resp.StatusCode, body: string(body), finalURL: finalURL, ok: true}
+}
+
+func requestFailure(service string, result fetchResult) Result {
+	reason := result.reason
+	if reason == "" {
+		reason = "transport"
+	}
+	return Result{Service: service, Status: Unknown, Reason: reason, Detail: "request failed"}
 }
 
 func containsFold(haystack, needle string) bool {
@@ -127,7 +166,7 @@ func (chatGPTWeb) Name() string { return "chatgpt_web" }
 func (chatGPTWeb) Check(ctx context.Context, client *http.Client) Result {
 	r := fetch(ctx, client, "https://api.openai.com/compliance/cookie_requirements", nil)
 	if !r.ok {
-		return Result{Service: "chatgpt_web", Status: Unknown, Detail: "request failed"}
+		return requestFailure("chatgpt_web", r)
 	}
 	if containsFold(r.body, "unsupported_country") {
 		return Result{Service: "chatgpt_web", Status: Blocked, Detail: "unsupported country"}
@@ -142,7 +181,7 @@ func (chatGPTApp) Name() string { return "chatgpt_app" }
 func (chatGPTApp) Check(ctx context.Context, client *http.Client) Result {
 	r := fetch(ctx, client, "https://ios.chat.openai.com", nil)
 	if !r.ok {
-		return Result{Service: "chatgpt_app", Status: Unknown, Detail: "request failed"}
+		return requestFailure("chatgpt_app", r)
 	}
 	if isChallenge(r.status, r.body) {
 		return Result{Service: "chatgpt_app", Status: Unknown, Detail: "Cloudflare challenge"}
@@ -172,7 +211,7 @@ func (gemini) Check(ctx context.Context, client *http.Client) Result {
 		"Accept-Language": "en-US,en;q=0.9",
 	})
 	if !r.ok {
-		return Result{Service: "gemini", Status: Unknown, Detail: "request failed"}
+		return requestFailure("gemini", r)
 	}
 	if isChallenge(r.status, r.body) {
 		return Result{Service: "gemini", Status: Unknown, Detail: "Cloudflare challenge"}
@@ -200,7 +239,7 @@ func (youTubePremium) Check(ctx context.Context, client *http.Client) Result {
 		"Accept-Language": "en-US,en;q=0.9",
 	})
 	if !r.ok {
-		return Result{Service: "youtube_premium", Status: Unknown, Detail: "request failed"}
+		return requestFailure("youtube_premium", r)
 	}
 	body := strings.ToLower(r.body)
 	switch {
@@ -272,7 +311,7 @@ func (tiktok) Check(ctx context.Context, client *http.Client) Result {
 		"Accept-Language": "en-US,en;q=0.9",
 	})
 	if !r.ok {
-		return Result{Service: "tiktok", Status: Unknown, Detail: "request failed"}
+		return requestFailure("tiktok", r)
 	}
 	body := strings.ToLower(r.body)
 	for _, marker := range tiktokBlockMarkers {
@@ -309,7 +348,7 @@ func (claude) Check(ctx context.Context, client *http.Client) Result {
 		"Upgrade-Insecure-Requests": "1",
 	})
 	if !r.ok {
-		return Result{Service: "claude", Status: Unknown, Detail: "request failed"}
+		return requestFailure("claude", r)
 	}
 	lower := strings.ToLower(r.body)
 	if isChallenge(r.status, lower) {
@@ -336,7 +375,7 @@ func (notebookLM) Check(ctx context.Context, client *http.Client) Result {
 		"Accept-Language": "en-US,en;q=0.9",
 	})
 	if !r.ok {
-		return Result{Service: "notebooklm", Status: Unknown, Detail: "request failed"}
+		return requestFailure("notebooklm", r)
 	}
 	if isChallenge(r.status, r.body) {
 		return Result{Service: "notebooklm", Status: Unknown, Detail: "Cloudflare challenge"}
@@ -362,7 +401,7 @@ func (reddit) Check(ctx context.Context, client *http.Client) Result {
 		"Accept": "text/html,*/*;q=0.8",
 	})
 	if !r.ok {
-		return Result{Service: "reddit", Status: Unknown, Detail: "request failed"}
+		return requestFailure("reddit", r)
 	}
 	switch {
 	case r.status == 200:
@@ -392,7 +431,7 @@ func (amazonPrime) Check(ctx context.Context, client *http.Client) Result {
 		"Accept-Language": "en-US,en;q=0.9",
 	})
 	if !r.ok {
-		return Result{Service: "amazon_prime", Status: Unknown, Detail: "request failed"}
+		return requestFailure("amazon_prime", r)
 	}
 	if m := regexp.MustCompile(`"currentTerritory":"([A-Z]{2})"`).FindStringSubmatch(r.body); m != nil {
 		return Result{Service: "amazon_prime", Status: Available, Region: m[1]}

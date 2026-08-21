@@ -8,12 +8,59 @@ import (
 	"testing"
 	"time"
 
+	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/geo"
 	"github.com/michael/vless-sub-server/internal/parse"
 	"github.com/michael/vless-sub-server/internal/quality"
 	"github.com/xtls/xray-core/infra/conf/serial"
 )
+
+func TestEmbeddedXrayInstancesAreSerialized(t *testing.T) {
+	record := parse.ProxyRecord{Protocol: parse.VLESS, Host: "127.0.0.1", Port: 443, UUIDOrPassword: "00000000-0000-0000-0000-000000000001"}
+	cfg := &config.Config{ExitProbeTimeout: time.Second}
+	first := NewExitProber(cfg)
+	if err := first.StartWithProxies([]parse.ProxyRecord{record}); err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+
+	second := NewExitProber(cfg)
+	started := make(chan error, 1)
+	go func() { started <- second.StartWithProxies([]parse.ProxyRecord{record}) }()
+	select {
+	case err := <-started:
+		t.Fatalf("second embedded Xray started concurrently: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	first.Stop()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+		second.Stop()
+	case <-time.After(time.Second):
+		t.Fatal("second embedded Xray did not start after first stopped")
+	}
+}
+
+func TestEmbeddedXrayWaitHonorsContextCancellation(t *testing.T) {
+	record := parse.ProxyRecord{Protocol: parse.VLESS, Host: "127.0.0.1", Port: 443, UUIDOrPassword: "00000000-0000-0000-0000-000000000001"}
+	first := NewExitProber(&config.Config{ExitProbeTimeout: time.Second})
+	if err := first.StartWithProxies([]parse.ProxyRecord{record}); err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	second := NewExitProber(&config.Config{ExitProbeTimeout: time.Second})
+	if err := second.StartWithProxiesContext(ctx, []parse.ProxyRecord{record}); err == nil {
+		t.Fatal("context cancellation did not stop embedded Xray wait")
+	}
+}
 
 func TestAggregateHealthSamplesKeepsGeoOnlyProxyReachable(t *testing.T) {
 	metrics := aggregateHealthSamples(nil, 5, true)

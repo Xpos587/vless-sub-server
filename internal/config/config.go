@@ -11,96 +11,108 @@ import (
 )
 
 type Config struct {
-	Port                   int           `env:"PORT" envDefault:"8080"`
-	RefreshInterval        time.Duration `env:"REFRESH_INTERVAL" envDefault:"30m"`
-	SubscriptionURLs       []string      `env:"SUBSCRIPTION_URLS,required" envSeparator:","`
-	NameInclude            string        `env:"NAME_INCLUDE"`
-	NameExclude            string        `env:"NAME_EXCLUDE"`
-	DNSTimeout             time.Duration `env:"DNS_TIMEOUT" envDefault:"2s"`
-	DNSCacheTTL            time.Duration `env:"DNS_CACHE_TTL" envDefault:"10m"`
-	ExitProbeTimeout       time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
-	ProbeSampleCount       int           `env:"PROBE_SAMPLE_COUNT" envDefault:"5"`
-	ProbeSampleGap         time.Duration `env:"PROBE_SAMPLE_GAP" envDefault:"100ms"`
-	ProbeSampleTimeout     time.Duration `env:"PROBE_SAMPLE_TIMEOUT" envDefault:"5s"`
-	BandwidthEnabled       bool          `env:"BANDWIDTH_ENABLED" envDefault:"true"`
-	BandwidthBytes         int64         `env:"BANDWIDTH_BYTES" envDefault:"1048576"`
-	BandwidthBudget        int64         `env:"BANDWIDTH_BUDGET_BYTES" envDefault:"33554432"`
-	BandwidthTimeout       time.Duration `env:"BANDWIDTH_TIMEOUT" envDefault:"8s"`
-	BandwidthRefreshAfter  time.Duration `env:"BANDWIDTH_REFRESH_AFTER" envDefault:"2h"`
-	BandwidthRetryAfter    time.Duration `env:"BANDWIDTH_RETRY_AFTER" envDefault:"30m"`
-	SourceStaleMaxAge      time.Duration `env:"SOURCE_STALE_MAX_AGE" envDefault:"6h"`
-	CountryStatePath       string        `env:"COUNTRY_STATE_PATH"`
-	CacheStatePath         string        `env:"CACHE_STATE_PATH"`
-	CountryReprobeInterval time.Duration `env:"COUNTRY_REPROBE_INTERVAL" envDefault:"5m"`
-	ExitObserverURL        string        `env:"EXIT_OBSERVER_URL" envDefault:"https://exit-observer.hypcat.net/_exit"`
-	MaxConcurrent          int           `env:"MAX_CONCURRENT" envDefault:"50"`
-	GeoDatDir              string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
-	Hwid                   string        `env:"HWID,required"`
-	SourceAliases          []string      `env:"SOURCE_ALIASES" envSeparator:","`
-	MetricsPort            int           `env:"METRICS_PORT" envDefault:"9090"`
-	FetchProxyFallback     bool          `env:"FETCH_PROXY_FALLBACK" envDefault:"true"`
-	SourceFetchProxies     []string      `env:"SOURCE_FETCH_PROXIES" envSeparator:","`
-	IPIntelEnabled         bool          `env:"IP_INTEL_ENABLED" envDefault:"true"`
-	IPIntelTimeout         time.Duration `env:"IP_INTEL_TIMEOUT" envDefault:"8s"`
-	IPIntelCacheTTL        time.Duration `env:"IP_INTEL_CACHE_TTL" envDefault:"6h"`
-	IPIntelMaxConcurrent   int           `env:"IP_INTEL_MAX_CONCURRENT" envDefault:"8"`
-	IPIntelCheckPlace      bool          `env:"IP_INTEL_CHECK_PLACE" envDefault:"false"`
-	IPIntelProxyURL        string        `env:"IP_INTEL_PROXY_URL"`
-	ServiceCheckEnabled    bool          `env:"SERVICE_CHECK_ENABLED" envDefault:"false"`
-	ServiceCheckTimeout    time.Duration `env:"SERVICE_CHECK_TIMEOUT" envDefault:"10s"`
-	ServiceCheckMaxConcurrent int       `env:"SERVICE_CHECK_MAX_CONCURRENT" envDefault:"4"`
-	ServiceCheckInterval      time.Duration `env:"SERVICE_CHECK_INTERVAL" envDefault:"10m"`
-	ServiceCheckBatchSize     int           `env:"SERVICE_CHECK_BATCH_SIZE" envDefault:"20"`
-	ServiceCheckCacheTTL      time.Duration `env:"SERVICE_CHECK_CACHE_TTL" envDefault:"2h"`
-	PortCheckEnabled         bool          `env:"PORT_CHECK_ENABLED" envDefault:"false"`
-	PortCheckTimeout         time.Duration `env:"PORT_CHECK_TIMEOUT" envDefault:"3s"`
-	PortCheckMaxConcurrent   int           `env:"PORT_CHECK_MAX_CONCURRENT" envDefault:"4"`
-	DNSBLEnabled             bool          `env:"DNSBL_ENABLED" envDefault:"false"`
-	DNSBLTimeout             time.Duration `env:"DNSBL_TIMEOUT" envDefault:"3s"`
-	DNSBLMaxConcurrent       int           `env:"DNSBL_MAX_CONCURRENT" envDefault:"4"`
-	ProxyCheckEnabled       bool          `env:"PROXYCHECK_ENABLED" envDefault:"false"`
-	ProxyCheckTimeout       time.Duration `env:"PROXYCHECK_TIMEOUT" envDefault:"10s"`
+	Port                            int           `env:"PORT" envDefault:"8080"`
+	RefreshInterval                 time.Duration `env:"REFRESH_INTERVAL" envDefault:"30m"`
+	SubscriptionURLs                []string      `env:"SUBSCRIPTION_URLS,required" envSeparator:","`
+	NameInclude                     string        `env:"NAME_INCLUDE"`
+	NameExclude                     string        `env:"NAME_EXCLUDE"`
+	DNSTimeout                      time.Duration `env:"DNS_TIMEOUT" envDefault:"2s"`
+	DNSCacheTTL                     time.Duration `env:"DNS_CACHE_TTL" envDefault:"10m"`
+	ExitProbeTimeout                time.Duration `env:"EXIT_PROBE_TIMEOUT" envDefault:"12s"`
+	ProbeSampleCount                int           `env:"PROBE_SAMPLE_COUNT" envDefault:"5"`
+	ProbeSampleGap                  time.Duration `env:"PROBE_SAMPLE_GAP" envDefault:"100ms"`
+	ProbeSampleTimeout              time.Duration `env:"PROBE_SAMPLE_TIMEOUT" envDefault:"5s"`
+	BandwidthEnabled                bool          `env:"BANDWIDTH_ENABLED" envDefault:"true"`
+	BandwidthBytes                  int64         `env:"BANDWIDTH_BYTES" envDefault:"1048576"`
+	BandwidthBudget                 int64         `env:"BANDWIDTH_BUDGET_BYTES" envDefault:"33554432"`
+	BandwidthTimeout                time.Duration `env:"BANDWIDTH_TIMEOUT" envDefault:"8s"`
+	BandwidthRefreshAfter           time.Duration `env:"BANDWIDTH_REFRESH_AFTER" envDefault:"2h"`
+	BandwidthRetryAfter             time.Duration `env:"BANDWIDTH_RETRY_AFTER" envDefault:"30m"`
+	SourceStaleMaxAge               time.Duration `env:"SOURCE_STALE_MAX_AGE" envDefault:"6h"`
+	CountryStatePath                string        `env:"COUNTRY_STATE_PATH"`
+	CacheStatePath                  string        `env:"CACHE_STATE_PATH"`
+	CountryReprobeInterval          time.Duration `env:"COUNTRY_REPROBE_INTERVAL" envDefault:"5m"`
+	ExitObserverURL                 string        `env:"EXIT_OBSERVER_URL" envDefault:"https://exit-observer.hypcat.net/_exit"`
+	MaxConcurrent                   int           `env:"MAX_CONCURRENT" envDefault:"50"`
+	GeoDatDir                       string        `env:"GEO_DAT_DIR" envDefault:"/usr/local/share/xray"`
+	Hwid                            string        `env:"HWID,required"`
+	SourceAliases                   []string      `env:"SOURCE_ALIASES" envSeparator:","`
+	MetricsPort                     int           `env:"METRICS_PORT" envDefault:"9090"`
+	FetchProxyFallback              bool          `env:"FETCH_PROXY_FALLBACK" envDefault:"true"`
+	SourceFetchProxies              []string      `env:"SOURCE_FETCH_PROXIES" envSeparator:","`
+	IPIntelEnabled                  bool          `env:"IP_INTEL_ENABLED" envDefault:"true"`
+	IPIntelTimeout                  time.Duration `env:"IP_INTEL_TIMEOUT" envDefault:"8s"`
+	IPIntelCacheTTL                 time.Duration `env:"IP_INTEL_CACHE_TTL" envDefault:"6h"`
+	IPIntelMaxConcurrent            int           `env:"IP_INTEL_MAX_CONCURRENT" envDefault:"8"`
+	IPIntelCheckPlace               bool          `env:"IP_INTEL_CHECK_PLACE" envDefault:"false"`
+	IPIntelProxyURL                 string        `env:"IP_INTEL_PROXY_URL"`
+	ServiceCheckEnabled             bool          `env:"SERVICE_CHECK_ENABLED" envDefault:"false"`
+	ServiceCheckTimeout             time.Duration `env:"SERVICE_CHECK_TIMEOUT" envDefault:"10s"`
+	ServiceCheckMaxConcurrent       int           `env:"SERVICE_CHECK_MAX_CONCURRENT" envDefault:"4"`
+	ServiceCheckPerTargetConcurrent int           `env:"SERVICE_CHECK_PER_TARGET_CONCURRENT" envDefault:"3"`
+	ServiceCheckInterval            time.Duration `env:"SERVICE_CHECK_INTERVAL" envDefault:"10m"`
+	ServiceCheckBatchSize           int           `env:"SERVICE_CHECK_BATCH_SIZE" envDefault:"20"`
+	ServiceCheckCacheTTL            time.Duration `env:"SERVICE_CHECK_CACHE_TTL" envDefault:"2h"`
+	PortCheckEnabled                bool          `env:"PORT_CHECK_ENABLED" envDefault:"false"`
+	PortCheckTimeout                time.Duration `env:"PORT_CHECK_TIMEOUT" envDefault:"3s"`
+	PortCheckMaxConcurrent          int           `env:"PORT_CHECK_MAX_CONCURRENT" envDefault:"4"`
+	DNSBLEnabled                    bool          `env:"DNSBL_ENABLED" envDefault:"false"`
+	DNSBLTimeout                    time.Duration `env:"DNSBL_TIMEOUT" envDefault:"3s"`
+	DNSBLMaxConcurrent              int           `env:"DNSBL_MAX_CONCURRENT" envDefault:"4"`
+	ProxyCheckEnabled               bool          `env:"PROXYCHECK_ENABLED" envDefault:"false"`
+	ProxyCheckTimeout               time.Duration `env:"PROXYCHECK_TIMEOUT" envDefault:"10s"`
+	EnrichmentCheckInterval         time.Duration `env:"ENRICHMENT_CHECK_INTERVAL" envDefault:"1m"`
+	EnrichmentCheckBatchSize        int           `env:"ENRICHMENT_CHECK_BATCH_SIZE" envDefault:"25"`
+	EnrichmentCheckMaxConcurrent    int           `env:"ENRICHMENT_CHECK_MAX_CONCURRENT" envDefault:"8"`
+	PortCheckCacheTTL               time.Duration `env:"PORT_CHECK_CACHE_TTL" envDefault:"6h"`
+	DNSBLCacheTTL                   time.Duration `env:"DNSBL_CACHE_TTL" envDefault:"6h"`
 }
 
 func Load() (*Config, error) {
 	c := &Config{
-		Port:                   8080,
-		RefreshInterval:        30 * time.Minute,
-		DNSTimeout:             2 * time.Second,
-		DNSCacheTTL:            10 * time.Minute,
-		ExitProbeTimeout:       12 * time.Second,
-		ProbeSampleCount:       5,
-		ProbeSampleGap:         100 * time.Millisecond,
-		ProbeSampleTimeout:     5 * time.Second,
-		BandwidthEnabled:       true,
-		BandwidthBytes:         1 << 20,
-		BandwidthBudget:        32 << 20,
-		BandwidthTimeout:       8 * time.Second,
-		BandwidthRefreshAfter:  2 * time.Hour,
-		BandwidthRetryAfter:    30 * time.Minute,
-		SourceStaleMaxAge:      6 * time.Hour,
-		CountryReprobeInterval: 5 * time.Minute,
-		ExitObserverURL:        "https://exit-observer.hypcat.net/_exit",
-		MaxConcurrent:          50,
-		GeoDatDir:              "/usr/local/share/xray",
-		IPIntelEnabled:         true,
-		IPIntelTimeout:         8 * time.Second,
-		IPIntelCacheTTL:        6 * time.Hour,
-		IPIntelMaxConcurrent:   8,
-		ServiceCheckEnabled:    false,
-		ServiceCheckTimeout:    10 * time.Second,
-		ServiceCheckMaxConcurrent: 4,
-		ServiceCheckInterval:      10 * time.Minute,
-		ServiceCheckBatchSize:     20,
-		ServiceCheckCacheTTL:      2 * time.Hour,
-		PortCheckEnabled:         false,
-		PortCheckTimeout:         3 * time.Second,
-		PortCheckMaxConcurrent:   4,
-		DNSBLEnabled:             false,
-		DNSBLTimeout:             3 * time.Second,
-		DNSBLMaxConcurrent:       4,
-		ProxyCheckEnabled:       false,
-		ProxyCheckTimeout:       10 * time.Second,
+		Port:                            8080,
+		RefreshInterval:                 30 * time.Minute,
+		DNSTimeout:                      2 * time.Second,
+		DNSCacheTTL:                     10 * time.Minute,
+		ExitProbeTimeout:                12 * time.Second,
+		ProbeSampleCount:                5,
+		ProbeSampleGap:                  100 * time.Millisecond,
+		ProbeSampleTimeout:              5 * time.Second,
+		BandwidthEnabled:                true,
+		BandwidthBytes:                  1 << 20,
+		BandwidthBudget:                 32 << 20,
+		BandwidthTimeout:                8 * time.Second,
+		BandwidthRefreshAfter:           2 * time.Hour,
+		BandwidthRetryAfter:             30 * time.Minute,
+		SourceStaleMaxAge:               6 * time.Hour,
+		CountryReprobeInterval:          5 * time.Minute,
+		ExitObserverURL:                 "https://exit-observer.hypcat.net/_exit",
+		MaxConcurrent:                   50,
+		GeoDatDir:                       "/usr/local/share/xray",
+		IPIntelEnabled:                  true,
+		IPIntelTimeout:                  8 * time.Second,
+		IPIntelCacheTTL:                 6 * time.Hour,
+		IPIntelMaxConcurrent:            8,
+		ServiceCheckEnabled:             false,
+		ServiceCheckTimeout:             10 * time.Second,
+		ServiceCheckMaxConcurrent:       4,
+		ServiceCheckPerTargetConcurrent: 3,
+		ServiceCheckInterval:            10 * time.Minute,
+		ServiceCheckBatchSize:           20,
+		ServiceCheckCacheTTL:            2 * time.Hour,
+		PortCheckEnabled:                false,
+		PortCheckTimeout:                3 * time.Second,
+		PortCheckMaxConcurrent:          4,
+		DNSBLEnabled:                    false,
+		DNSBLTimeout:                    3 * time.Second,
+		DNSBLMaxConcurrent:              4,
+		ProxyCheckEnabled:               false,
+		ProxyCheckTimeout:               10 * time.Second,
+		EnrichmentCheckInterval:         time.Minute,
+		EnrichmentCheckBatchSize:        25,
+		EnrichmentCheckMaxConcurrent:    8,
+		PortCheckCacheTTL:               6 * time.Hour,
+		DNSBLCacheTTL:                   6 * time.Hour,
 	}
 	if raw := os.Getenv("SUBSCRIPTION_URLS"); raw == "" {
 		return nil, fmt.Errorf("SUBSCRIPTION_URLS is required")
@@ -150,6 +162,9 @@ func Load() (*Config, error) {
 	if c.ServiceCheckMaxConcurrent, err = intEnv("SERVICE_CHECK_MAX_CONCURRENT", c.ServiceCheckMaxConcurrent); err != nil || c.ServiceCheckMaxConcurrent < 1 {
 		return nil, fmt.Errorf("SERVICE_CHECK_MAX_CONCURRENT must be positive")
 	}
+	if c.ServiceCheckPerTargetConcurrent, err = intEnv("SERVICE_CHECK_PER_TARGET_CONCURRENT", c.ServiceCheckPerTargetConcurrent); err != nil || c.ServiceCheckPerTargetConcurrent < 1 {
+		return nil, fmt.Errorf("SERVICE_CHECK_PER_TARGET_CONCURRENT must be positive")
+	}
 	if c.ServiceCheckInterval, err = durationEnv("SERVICE_CHECK_INTERVAL", c.ServiceCheckInterval); err != nil || c.ServiceCheckInterval <= 0 {
 		return nil, fmt.Errorf("SERVICE_CHECK_INTERVAL must be positive")
 	}
@@ -188,6 +203,21 @@ func Load() (*Config, error) {
 	}
 	if c.ProxyCheckTimeout, err = durationEnv("PROXYCHECK_TIMEOUT", c.ProxyCheckTimeout); err != nil || c.ProxyCheckTimeout <= 0 {
 		return nil, fmt.Errorf("PROXYCHECK_TIMEOUT must be positive")
+	}
+	if c.EnrichmentCheckInterval, err = durationEnv("ENRICHMENT_CHECK_INTERVAL", c.EnrichmentCheckInterval); err != nil || c.EnrichmentCheckInterval <= 0 {
+		return nil, fmt.Errorf("ENRICHMENT_CHECK_INTERVAL must be positive")
+	}
+	if c.EnrichmentCheckBatchSize, err = intEnv("ENRICHMENT_CHECK_BATCH_SIZE", c.EnrichmentCheckBatchSize); err != nil || c.EnrichmentCheckBatchSize < 1 {
+		return nil, fmt.Errorf("ENRICHMENT_CHECK_BATCH_SIZE must be positive")
+	}
+	if c.EnrichmentCheckMaxConcurrent, err = intEnv("ENRICHMENT_CHECK_MAX_CONCURRENT", c.EnrichmentCheckMaxConcurrent); err != nil || c.EnrichmentCheckMaxConcurrent < 1 {
+		return nil, fmt.Errorf("ENRICHMENT_CHECK_MAX_CONCURRENT must be positive")
+	}
+	if c.PortCheckCacheTTL, err = durationEnv("PORT_CHECK_CACHE_TTL", c.PortCheckCacheTTL); err != nil || c.PortCheckCacheTTL <= 0 {
+		return nil, fmt.Errorf("PORT_CHECK_CACHE_TTL must be positive")
+	}
+	if c.DNSBLCacheTTL, err = durationEnv("DNSBL_CACHE_TTL", c.DNSBLCacheTTL); err != nil || c.DNSBLCacheTTL <= 0 {
+		return nil, fmt.Errorf("DNSBL_CACHE_TTL must be positive")
 	}
 	if raw := os.Getenv("IP_INTEL_CHECK_PLACE"); raw != "" {
 		if c.IPIntelCheckPlace, err = strconv.ParseBool(raw); err != nil {

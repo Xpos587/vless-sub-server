@@ -83,3 +83,27 @@ func TestLoadMetricsPortDefault(t *testing.T) {
 		t.Fatalf("MetricsPort = %d, want 9090", cfg.MetricsPort)
 	}
 }
+
+func TestLoadReadsEnrichmentWorkerSettings(t *testing.T) {
+	t.Setenv("SUBSCRIPTION_URLS", "https://example.test/sub")
+	t.Setenv("HWID", "test")
+	t.Setenv("ENRICHMENT_CHECK_INTERVAL", "2m")
+	t.Setenv("ENRICHMENT_CHECK_BATCH_SIZE", "17")
+	t.Setenv("ENRICHMENT_CHECK_MAX_CONCURRENT", "6")
+	t.Setenv("PORT_CHECK_CACHE_TTL", "4h")
+	t.Setenv("DNSBL_CACHE_TTL", "8h")
+	t.Setenv("SERVICE_CHECK_PER_TARGET_CONCURRENT", "3")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnrichmentCheckInterval.String() != "2m0s" || cfg.EnrichmentCheckBatchSize != 17 || cfg.EnrichmentCheckMaxConcurrent != 6 {
+		t.Fatalf("worker settings = %#v", cfg)
+	}
+	if cfg.PortCheckCacheTTL.String() != "4h0m0s" || cfg.DNSBLCacheTTL.String() != "8h0m0s" {
+		t.Fatalf("cache settings = %#v", cfg)
+	}
+	if cfg.ServiceCheckPerTargetConcurrent != 3 {
+		t.Fatalf("per-target concurrency = %d", cfg.ServiceCheckPerTargetConcurrent)
+	}
+}

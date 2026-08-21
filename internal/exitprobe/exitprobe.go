@@ -76,7 +76,25 @@ type ExitProber struct {
 	geoMu     sync.Mutex
 	geoByIP   map[netip.Addr]geoLookup
 	geoGroup  singleflight.Group
+	ownsCore  bool
 }
+
+var embeddedXraySlot = func() chan struct{} {
+	slot := make(chan struct{}, 1)
+	slot <- struct{}{}
+	return slot
+}()
+
+func acquireEmbeddedXray(ctx context.Context) error {
+	select {
+	case <-embeddedXraySlot:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseEmbeddedXray() { embeddedXraySlot <- struct{}{} }
 
 type geoLookup struct {
 	info        *geo.GeoInfo
@@ -101,13 +119,30 @@ func NewExitProber(cfg *config.Config) *ExitProber {
 }
 
 func (ep *ExitProber) StartWithProxies(records []parse.ProxyRecord) error {
+	return ep.StartWithProxiesContext(context.Background(), records)
+}
+
+func (ep *ExitProber) StartWithProxiesContext(ctx context.Context, records []parse.ProxyRecord) error {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
 
 	if ep.instance != nil {
 		ep.instance.Close()
 		ep.instance = nil
+		if ep.ownsCore {
+			ep.ownsCore = false
+			releaseEmbeddedXray()
+		}
 	}
+	if err := acquireEmbeddedXray(ctx); err != nil {
+		return fmt.Errorf("wait for embedded xray: %w", err)
+	}
+	started := false
+	defer func() {
+		if !started {
+			releaseEmbeddedXray()
+		}
+	}()
 
 	configJSON := buildOutboundOnlyConfig(records)
 	xrayConfig, err := serial.DecodeJSONConfig(bytes.NewReader(configJSON))
@@ -128,6 +163,8 @@ func (ep *ExitProber) StartWithProxies(records []parse.ProxyRecord) error {
 	}
 
 	ep.instance = instance
+	ep.ownsCore = true
+	started = true
 	ep.proxyTags = make([]string, len(records))
 	for i := range records {
 		ep.proxyTags[i] = fmt.Sprintf("proxy_%d_out", i)
@@ -146,6 +183,10 @@ func (ep *ExitProber) Stop() {
 	if ep.instance != nil {
 		ep.instance.Close()
 		ep.instance = nil
+	}
+	if ep.ownsCore {
+		ep.ownsCore = false
+		releaseEmbeddedXray()
 	}
 }
 

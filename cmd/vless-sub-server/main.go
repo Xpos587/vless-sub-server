@@ -24,11 +24,12 @@ import (
 const initWaitTimeout = 5 * time.Second
 
 var (
-	refreshing       atomic.Int32 // 0=idle, 1=refreshing
-	countryReprobing atomic.Int32 // 0=idle, 1=reprobing final WARP countries
-	serviceChecking  atomic.Int32 // 0=idle, 1=running service availability checks
-	cfg              *config.Config
-	service          *pipeline.Pipeline
+	refreshing         atomic.Int32 // 0=idle, 1=refreshing
+	countryReprobing   atomic.Int32 // 0=idle, 1=reprobing final WARP countries
+	serviceChecking    atomic.Int32 // 0=idle, 1=running service availability checks
+	enrichmentChecking atomic.Int32 // 0=idle, 1=running exit-IP enrichment checks
+	cfg                *config.Config
+	service            *pipeline.Pipeline
 )
 
 func main() {
@@ -75,6 +76,14 @@ func main() {
 		go func() {
 			for range serviceTicker.C {
 				triggerServiceChecks()
+			}
+		}()
+	}
+	if cfg.IPIntelEnabled || cfg.PortCheckEnabled || cfg.DNSBLEnabled {
+		enrichmentTicker := time.NewTicker(cfg.EnrichmentCheckInterval)
+		go func() {
+			for range enrichmentTicker.C {
+				triggerEnrichmentChecks()
 			}
 		}()
 	}
@@ -146,8 +155,28 @@ func refreshSubscriptions() {
 		if err := service.SaveCached(cfg.CacheStatePath); err != nil {
 			log.Printf("[subscription-cache] save failed")
 		}
+		triggerEnrichmentChecks()
 	}
 	log.Printf("[refresh] done in %s: parsed=%d resolved=%d good=%d partial=%d dead=%d bandwidth=%d/%d country_direct=%v country_warp=%v country_state_save_failed=%t published=%t", time.Since(start), result.Parsed, result.Resolved, result.Good, result.Partial, result.Dead, result.BandwidthSuccesses, result.BandwidthCandidates, result.DirectCountrySources, result.WarpCountrySources, result.CountryStateSaveFailed, result.Published)
+}
+
+func triggerEnrichmentChecks() {
+	if !enrichmentChecking.CompareAndSwap(0, 1) {
+		return
+	}
+	go func() {
+		defer enrichmentChecking.Store(0)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[enrichment-check] panic recovered: %v", r)
+			}
+		}()
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		result := service.RunEnrichmentChecks(ctx)
+		log.Printf("[enrichment-check] done in %s: candidates=%d checked=%d cached=%d", time.Since(start), result.Candidates, result.Checked, result.CachedHits)
+	}()
 }
 
 func triggerRefresh() {

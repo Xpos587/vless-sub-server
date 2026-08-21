@@ -2,11 +2,24 @@ package dnsbl
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
 	"net/netip"
 )
+
+func TestClassifyLookupDistinguishesNXDOMAINFromResolverFailure(t *testing.T) {
+	if status := classifyLookup(nil, &net.DNSError{IsNotFound: true}); status != StatusClean {
+		t.Fatalf("NXDOMAIN status = %q", status)
+	}
+	if status := classifyLookup(nil, &net.DNSError{IsTimeout: true}); status != StatusUnknown {
+		t.Fatalf("timeout status = %q", status)
+	}
+	if status := classifyLookup([]string{"127.0.0.2"}, nil); status != StatusListed {
+		t.Fatalf("listed status = %q", status)
+	}
+}
 
 func TestCheckIPIPv6Unknown(t *testing.T) {
 	lists := []List{{Zone: "zen.spamhaus.org", Name: "Spamhaus"}}

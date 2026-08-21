@@ -3,6 +3,7 @@ package ipintel
 import (
 	"context"
 	"net/netip"
+	"sort"
 	"sync"
 	"time"
 )
@@ -80,16 +81,43 @@ type Provider interface {
 	Lookup(ctx context.Context, ip netip.Addr) (Result, bool)
 }
 
+type detailedProvider interface {
+	LookupDetailed(context.Context, netip.Addr) (Result, ProviderOutcome)
+}
+
+type ProviderOutcome string
+
+const (
+	ProviderSuccess    ProviderOutcome = "success"
+	ProviderQuota      ProviderOutcome = "quota"
+	ProviderHTTPError  ProviderOutcome = "http_error"
+	ProviderParseError ProviderOutcome = "parse_error"
+	ProviderTransport  ProviderOutcome = "transport"
+)
+
 // Aggregator merges several providers into one Intel and caches by IP.
 type Aggregator struct {
 	providers []Provider
 	cache     *cache
+	statsMu   sync.RWMutex
+	stats     map[providerStatKey]uint64
+}
+
+type providerStatKey struct {
+	provider string
+	outcome  ProviderOutcome
+}
+
+type ProviderStat struct {
+	Provider string
+	Outcome  ProviderOutcome
+	Count    uint64
 }
 
 // NewAggregator returns an aggregator that calls the given providers
 // concurrently and caches results for cacheTTL.
 func NewAggregator(providers []Provider, cacheTTL time.Duration) *Aggregator {
-	return &Aggregator{providers: providers, cache: newCache(cacheTTL)}
+	return &Aggregator{providers: providers, cache: newCache(cacheTTL), stats: make(map[providerStatKey]uint64)}
 }
 
 // Lookup returns a normalized Intel for ip. It never writes subscription
@@ -107,8 +135,15 @@ func (a *Aggregator) Lookup(ctx context.Context, ip netip.Addr) (Intel, bool) {
 		wg.Add(1)
 		go func(p Provider) {
 			defer wg.Done()
-			result, ok := p.Lookup(ctx, ip)
-			if !ok {
+			var result Result
+			outcome := ProviderTransport
+			if detailed, ok := p.(detailedProvider); ok {
+				result, outcome = detailed.LookupDetailed(ctx, ip)
+			} else if value, ok := p.Lookup(ctx, ip); ok {
+				result, outcome = value, ProviderSuccess
+			}
+			a.RecordProvider(p.Name(), outcome)
+			if outcome != ProviderSuccess {
 				return
 			}
 			mu.Lock()
@@ -124,6 +159,37 @@ func (a *Aggregator) Lookup(ctx context.Context, ip netip.Addr) (Intel, bool) {
 	intel := merge(results, ip)
 	a.cache.set(key, intel)
 	return intel, true
+}
+
+func (a *Aggregator) RecordProvider(provider string, outcome ProviderOutcome) {
+	if a == nil || provider == "" || outcome == "" {
+		return
+	}
+	a.statsMu.Lock()
+	if a.stats == nil {
+		a.stats = make(map[providerStatKey]uint64)
+	}
+	a.stats[providerStatKey{provider: provider, outcome: outcome}]++
+	a.statsMu.Unlock()
+}
+
+func (a *Aggregator) ProviderStats() []ProviderStat {
+	if a == nil {
+		return nil
+	}
+	a.statsMu.RLock()
+	stats := make([]ProviderStat, 0, len(a.stats))
+	for key, count := range a.stats {
+		stats = append(stats, ProviderStat{Provider: key.provider, Outcome: key.outcome, Count: count})
+	}
+	a.statsMu.RUnlock()
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].Provider != stats[j].Provider {
+			return stats[i].Provider < stats[j].Provider
+		}
+		return stats[i].Outcome < stats[j].Outcome
+	})
+	return stats
 }
 
 func merge(results []Result, ip netip.Addr) Intel {

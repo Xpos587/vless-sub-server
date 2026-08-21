@@ -16,6 +16,7 @@ import (
 	"github.com/michael/vless-sub-server/internal/dns"
 	"github.com/michael/vless-sub-server/internal/dnsbl"
 	"github.com/michael/vless-sub-server/internal/endpointgeo"
+	"github.com/michael/vless-sub-server/internal/enrichment"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/fetch"
 	"github.com/michael/vless-sub-server/internal/format"
@@ -37,34 +38,34 @@ type CachedData struct {
 }
 
 type CachedEntry struct {
-	Entry         rename.RenamedEntry
-	WarpEntry     rename.RenamedEntry
-	Countries     country.RouteCountries
-	DirectHealthy bool
-	WarpHealthy   bool
-	Intel         *ipintel.Intel
-	WarpIntel     *ipintel.Intel
-	Services      []servicecheck.Result
-	WarpServices  []servicecheck.Result
-	PortResults   []portcheck.PortResult
-	WarpPortResults []portcheck.PortResult
-	DNSBLResults    []dnsbl.Result
+	Entry            rename.RenamedEntry
+	WarpEntry        rename.RenamedEntry
+	Countries        country.RouteCountries
+	DirectHealthy    bool
+	WarpHealthy      bool
+	Intel            *ipintel.Intel
+	WarpIntel        *ipintel.Intel
+	Services         []servicecheck.Result
+	WarpServices     []servicecheck.Result
+	PortResults      []portcheck.PortResult
+	WarpPortResults  []portcheck.PortResult
+	DNSBLResults     []dnsbl.Result
 	WarpDNSBLResults []dnsbl.Result
 }
 
 type outputEntry struct {
-	Record    parse.ProxyRecord
-	Geo       *geo.GeoInfo
-	WarpGeo   *geo.GeoInfo
-	IsLAN     bool
-	Countries country.RouteCountries
-	Intel     *ipintel.Intel
-	WarpIntel *ipintel.Intel
-	Services     []servicecheck.Result
-	WarpServices []servicecheck.Result
-	PortResults   []portcheck.PortResult
-	WarpPortResults []portcheck.PortResult
-	DNSBLResults    []dnsbl.Result
+	Record           parse.ProxyRecord
+	Geo              *geo.GeoInfo
+	WarpGeo          *geo.GeoInfo
+	IsLAN            bool
+	Countries        country.RouteCountries
+	Intel            *ipintel.Intel
+	WarpIntel        *ipintel.Intel
+	Services         []servicecheck.Result
+	WarpServices     []servicecheck.Result
+	PortResults      []portcheck.PortResult
+	WarpPortResults  []portcheck.PortResult
+	DNSBLResults     []dnsbl.Result
 	WarpDNSBLResults []dnsbl.Result
 }
 
@@ -94,6 +95,14 @@ type Pipeline struct {
 	refreshMu    sync.Mutex   // Refresh and country-only reprobes share mutable runtime state.
 	ipintel      *ipintel.Aggregator
 	serviceCache *servicecheck.Cache
+	intelCache   *enrichment.Cache[ipintel.Intel]
+	portCache    *enrichment.Cache[[]portcheck.PortResult]
+	dnsblCache   *enrichment.Cache[[]dnsbl.Result]
+	intelLookup  func(context.Context, netip.Addr) (ipintel.Intel, bool)
+	portLookup   func(context.Context, string) []portcheck.PortResult
+	dnsblLookup  func(context.Context, netip.Addr) []dnsbl.Result
+	checkMu      sync.RWMutex
+	checkRuns    map[string]time.Time
 }
 
 const (
@@ -103,7 +112,7 @@ const (
 
 func New(cfg *config.Config, dnsCache *dns.DNSCache) *Pipeline {
 	state, _ := country.OpenStateStore("")
-	p := &Pipeline{cfg: cfg, dnsCache: dnsCache, sourceCache: fetch.NewSourceCache(), runtime: quality.NewStore(), countryState: state}
+	p := &Pipeline{cfg: cfg, dnsCache: dnsCache, sourceCache: fetch.NewSourceCache(), runtime: quality.NewStore(), countryState: state, checkRuns: make(map[string]time.Time)}
 	if cfg.IPIntelEnabled {
 		providers := ipintel.DefaultProviders(cfg.IPIntelTimeout)
 		if cfg.IPIntelCheckPlace && cfg.IPIntelProxyURL != "" {
@@ -112,9 +121,23 @@ func New(cfg *config.Config, dnsCache *dns.DNSCache) *Pipeline {
 			}
 		}
 		p.ipintel = ipintel.NewAggregator(providers, cfg.IPIntelCacheTTL)
+		p.intelCache = enrichment.NewCache[ipintel.Intel](cfg.IPIntelCacheTTL)
+		p.intelLookup = p.ipintel.Lookup
 	}
 	if cfg.ServiceCheckEnabled {
 		p.serviceCache = servicecheck.NewCache(cfg.ServiceCheckCacheTTL)
+	}
+	if cfg.PortCheckEnabled {
+		p.portCache = enrichment.NewCache[[]portcheck.PortResult](cfg.PortCheckCacheTTL)
+		p.portLookup = func(ctx context.Context, ip string) []portcheck.PortResult {
+			return portcheck.CheckPorts(ctx, ip, portcheck.DefaultPorts, cfg.PortCheckTimeout, cfg.PortCheckMaxConcurrent)
+		}
+	}
+	if cfg.DNSBLEnabled {
+		p.dnsblCache = enrichment.NewCache[[]dnsbl.Result](cfg.DNSBLCacheTTL)
+		p.dnsblLookup = func(ctx context.Context, ip netip.Addr) []dnsbl.Result {
+			return dnsbl.CheckIP(ctx, ip, dnsbl.DefaultLists, cfg.DNSBLTimeout, cfg.DNSBLMaxConcurrent)
+		}
 	}
 	return p
 }
@@ -187,7 +210,7 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	}
 
 	ep := exitprobe.NewExitProber(p.cfg)
-	if ep.StartWithProxies(probed) != nil {
+	if ep.StartWithProxiesContext(ctx, probed) != nil {
 		return result
 	}
 	defer ep.Stop()
@@ -239,9 +262,7 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 		}
 	}
 
-	intelByIP := p.enrichExitIntel(ctx, probed, probes)
-	portByIP := p.checkPorts(ctx, probes)
-	dnsblByIP := p.checkDNSBL(ctx, probes)
+	intelByIP, portByIP, dnsblByIP := p.cachedEnrichmentByIP(probes)
 	entries, geoAvailable := p.outputEntries(probed, probes, dnsMap, intelByIP, portByIP, dnsblByIP, &result)
 	hasExisting := p.cache.Load() != nil
 	if !CanPublish(len(entries), hasExisting) {
@@ -284,19 +305,19 @@ func (p *Pipeline) Refresh(ctx context.Context) RefreshResult {
 	for i, entry := range renamed {
 		runtime, _ := p.runtime.Get(identity(entries[i].Record))
 		cachedEntries[i] = CachedEntry{
-			Entry:         cloneRenamedEntry(entry),
-			WarpEntry:     cloneRenamedEntry(warpRenamed[i]),
-			Countries:     entries[i].Countries,
-			DirectHealthy: runtime.DirectHealthy,
-			WarpHealthy:   runtime.WarpHealthy,
-			Intel:         cloneIntel(entries[i].Intel),
-			WarpIntel:     cloneIntel(entries[i].WarpIntel),
-			Services:      append([]servicecheck.Result(nil), entries[i].Services...),
-			WarpServices:  append([]servicecheck.Result(nil), entries[i].WarpServices...),
-			PortResults:     append([]portcheck.PortResult(nil), entries[i].PortResults...),
-			WarpPortResults: append([]portcheck.PortResult(nil), entries[i].WarpPortResults...),
-			DNSBLResults:      append([]dnsbl.Result(nil), entries[i].DNSBLResults...),
-			WarpDNSBLResults:  append([]dnsbl.Result(nil), entries[i].WarpDNSBLResults...),
+			Entry:            cloneRenamedEntry(entry),
+			WarpEntry:        cloneRenamedEntry(warpRenamed[i]),
+			Countries:        entries[i].Countries,
+			DirectHealthy:    runtime.DirectHealthy,
+			WarpHealthy:      runtime.WarpHealthy,
+			Intel:            cloneIntel(entries[i].Intel),
+			WarpIntel:        cloneIntel(entries[i].WarpIntel),
+			Services:         append([]servicecheck.Result(nil), entries[i].Services...),
+			WarpServices:     append([]servicecheck.Result(nil), entries[i].WarpServices...),
+			PortResults:      append([]portcheck.PortResult(nil), entries[i].PortResults...),
+			WarpPortResults:  append([]portcheck.PortResult(nil), entries[i].WarpPortResults...),
+			DNSBLResults:     append([]dnsbl.Result(nil), entries[i].DNSBLResults...),
+			WarpDNSBLResults: append([]dnsbl.Result(nil), entries[i].WarpDNSBLResults...),
 		}
 		if runtime.DirectHealthy {
 			directEntries = append(directEntries, entry)
@@ -337,7 +358,7 @@ func (p *Pipeline) ReprobeWarpCountries(ctx context.Context) CountryReprobeResul
 	}
 
 	ep := exitprobe.NewExitProber(p.cfg)
-	if ep.StartWithProxies(candidates) != nil {
+	if ep.StartWithProxiesContext(ctx, candidates) != nil {
 		return result
 	}
 	defer ep.Stop()
@@ -490,17 +511,17 @@ func (p *Pipeline) markBandwidthAttempt(key string, now time.Time) {
 
 func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*exitprobe.ExitProbeResult, dnsMap map[string]*dns.DNSResult, intelByIP map[string]*ipintel.Intel, portByIP map[string][]portcheck.PortResult, dnsblByIP map[string][]dnsbl.Result, result *RefreshResult) ([]outputEntry, int) {
 	type item struct {
-		record  parse.ProxyRecord
-		runtime quality.Runtime
-		geo     *geo.GeoInfo
-		lan     bool
-		probe   *exitprobe.ExitProbeResult
-		services []servicecheck.Result
+		record       parse.ProxyRecord
+		runtime      quality.Runtime
+		geo          *geo.GeoInfo
+		lan          bool
+		probe        *exitprobe.ExitProbeResult
+		services     []servicecheck.Result
 		warpServices []servicecheck.Result
-		ports    []portcheck.PortResult
-		warpPorts []portcheck.PortResult
-		dnsbl    []dnsbl.Result
-		warpDNSBL []dnsbl.Result
+		ports        []portcheck.PortResult
+		warpPorts    []portcheck.PortResult
+		dnsbl        []dnsbl.Result
+		warpDNSBL    []dnsbl.Result
 	}
 	items := make([]item, 0, len(records))
 	geoAvailable := 0
@@ -528,12 +549,12 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 		}
 		items = append(items, item{
 			record:       record,
-			runtime:       runtime,
+			runtime:      runtime,
 			geo:          info,
 			lan:          dnsMap[record.Host].IsPrivate,
 			probe:        probe,
-			services:     p.serviceResults(directIP(probe)),
-			warpServices: p.serviceResults(warpIP(probe)),
+			services:     p.serviceResults("direct", directIP(probe)),
+			warpServices: p.serviceResults("warp", warpIP(probe)),
 			ports:        portByIP[directIP(probe)],
 			warpPorts:    portByIP[warpIP(probe)],
 			dnsbl:        dnsblByIP[directIP(probe)],
@@ -559,18 +580,18 @@ func (p *Pipeline) outputEntries(records []parse.ProxyRecord, probes map[int]*ex
 			}
 		}
 		entries = append(entries, outputEntry{
-			Record:    item.record,
-			Geo:       item.geo,
-			WarpGeo:   cloneGeo(item.runtime.WarpGeoInfo),
-			IsLAN:     item.lan,
-			Countries: item.runtime.Countries,
-			Intel:     intel,
-			WarpIntel: warpIntel,
-			Services:     item.services,
-			WarpServices: item.warpServices,
-			PortResults:   item.ports,
-			WarpPortResults: item.warpPorts,
-			DNSBLResults:    item.dnsbl,
+			Record:           item.record,
+			Geo:              item.geo,
+			WarpGeo:          cloneGeo(item.runtime.WarpGeoInfo),
+			IsLAN:            item.lan,
+			Countries:        item.runtime.Countries,
+			Intel:            intel,
+			WarpIntel:        warpIntel,
+			Services:         item.services,
+			WarpServices:     item.warpServices,
+			PortResults:      item.ports,
+			WarpPortResults:  item.warpPorts,
+			DNSBLResults:     item.dnsbl,
 			WarpDNSBLResults: item.warpDNSBL,
 		})
 	}
@@ -649,13 +670,14 @@ func directIP(probe *exitprobe.ExitProbeResult) string {
 
 // serviceResults returns cached service-check results for an exit IP, or nil
 // if service checks are disabled or no results are cached yet.
-func (p *Pipeline) serviceResults(ip string) []servicecheck.Result {
+func (p *Pipeline) serviceResults(route, ip string) []servicecheck.Result {
 	if p.serviceCache == nil || ip == "" {
 		return nil
 	}
-	results, ok := p.serviceCache.Get(ip)
-	if !ok {
-		return nil
+	cached := p.serviceCache.Results(servicecheck.RouteKey{Route: route, IP: ip})
+	results := make([]servicecheck.Result, 0, len(cached))
+	for _, result := range cached {
+		results = append(results, result.Result)
 	}
 	return results
 }
@@ -820,16 +842,17 @@ func (p *Pipeline) checkDNSBL(ctx context.Context, probes map[int]*exitprobe.Exi
 	wg.Wait()
 	return byIP
 }
+
 // ServiceCheckResult reports the outcome of a background service-check batch.
 type ServiceCheckResult struct {
-	Candidates   int
-	Checked      int
-	CachedHits   int
+	Candidates int
+	Checked    int
+	CachedHits int
 }
 
-// RunServiceChecks probes service availability for a batch of stale exit IPs.
-// It runs in its own ticker, outside the refresh context, and caches results
-// by IP so repeat IPs are not re-checked every cycle.
+// RunServiceChecks probes stale services for unique route/IP targets. Results
+// are cached per service so one failed or expired checker does not invalidate
+// the other service verdicts for that route.
 func (p *Pipeline) RunServiceChecks(ctx context.Context) ServiceCheckResult {
 	result := ServiceCheckResult{}
 	if p.serviceCache == nil {
@@ -839,78 +862,118 @@ func (p *Pipeline) RunServiceChecks(ctx context.Context) ServiceCheckResult {
 	if !ok {
 		return result
 	}
-	type ipInfo struct {
+	type targetInfo struct {
 		record parse.ProxyRecord
-		route  string
+		stale  []servicecheck.Checker
 	}
-	unique := make(map[string]ipInfo)
+	checkers := servicecheck.DefaultCheckers()
+	checkerByName := make(map[string]servicecheck.Checker, len(checkers))
+	serviceNames := make([]string, 0, len(checkers))
+	for _, checker := range checkers {
+		checkerByName[checker.Name()] = checker
+		serviceNames = append(serviceNames, checker.Name())
+	}
+	unique := make(map[servicecheck.RouteKey]parse.ProxyRecord)
 	for _, entry := range cached.Entries {
 		if entry.DirectHealthy {
 			if ip := directExitIP(entry.Countries); ip != "" {
-				unique[ip] = ipInfo{entry.Entry.Record, "direct"}
+				unique[servicecheck.RouteKey{Route: "direct", IP: ip}] = entry.Entry.Record
 			}
 		}
 		if entry.WarpHealthy {
 			if ip := warpExitIP(entry.Countries); ip != "" {
-				if _, exists := unique[ip]; !exists {
-					unique[ip] = ipInfo{entry.Entry.Record, "warp"}
-				}
+				unique[servicecheck.RouteKey{Route: "warp", IP: ip}] = entry.Entry.Record
 			}
 		}
 	}
-	ips := make([]string, 0, len(unique))
-	for ip := range unique {
-		ips = append(ips, ip)
+	result.Candidates = len(unique)
+	targets := make([]servicecheck.RouteKey, 0, len(unique))
+	targetsByKey := make(map[servicecheck.RouteKey]targetInfo, len(unique))
+	for key, record := range unique {
+		staleNames := p.serviceCache.StaleServices(key, serviceNames)
+		if len(staleNames) == 0 {
+			result.CachedHits++
+			continue
+		}
+		staleCheckers := make([]servicecheck.Checker, 0, len(staleNames))
+		for _, name := range staleNames {
+			staleCheckers = append(staleCheckers, checkerByName[name])
+		}
+		targets = append(targets, key)
+		targetsByKey[key] = targetInfo{record: record, stale: staleCheckers}
 	}
-	result.Candidates = len(ips)
-	stale := p.serviceCache.StaleIPs(ips)
-	result.CachedHits = len(ips) - len(stale)
-	if len(stale) > p.cfg.ServiceCheckBatchSize {
-		stale = stale[:p.cfg.ServiceCheckBatchSize]
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Route != targets[j].Route {
+			return targets[i].Route < targets[j].Route
+		}
+		return targets[i].IP < targets[j].IP
+	})
+	if len(targets) > p.cfg.ServiceCheckBatchSize {
+		targets = targets[:p.cfg.ServiceCheckBatchSize]
 	}
-	if len(stale) == 0 {
+	if len(targets) == 0 {
+		p.refreshServiceMetrics()
 		return result
 	}
-	records := make([]parse.ProxyRecord, 0, len(stale))
-	ipToIndex := make(map[string]int, len(stale))
-	ipToRoute := make(map[string]string, len(stale))
-	for _, ip := range stale {
-		ipToIndex[ip] = len(records)
-		records = append(records, unique[ip].record)
-		ipToRoute[ip] = unique[ip].route
+	records := make([]parse.ProxyRecord, 0, len(targets))
+	targetIndex := make(map[servicecheck.RouteKey]int, len(targets))
+	for _, key := range targets {
+		targetIndex[key] = len(records)
+		records = append(records, targetsByKey[key].record)
 	}
 	ep := exitprobe.NewExitProber(p.cfg)
-	if ep.StartWithProxies(records) != nil {
+	if ep.StartWithProxiesContext(ctx, records) != nil {
 		return result
 	}
 	defer ep.Stop()
-	checkers := servicecheck.DefaultCheckers()
 	timeout := p.cfg.ServiceCheckTimeout
 	sem := make(chan struct{}, p.cfg.ServiceCheckMaxConcurrent)
 	var wg sync.WaitGroup
-	for _, ip := range stale {
-		wg.Add(1)
-		go func(ip string) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
-			defer func() { <-sem }()
-			index := ipToIndex[ip]
-			var tag string
-			if ipToRoute[ip] == "warp" {
-				tag = fmt.Sprintf("warp_%d_out", index)
-			} else {
-				tag = fmt.Sprintf("proxy_%d_out", index)
-			}
-			results := servicecheck.CheckAll(ctx, ep.HTTPClient(tag, timeout), checkers)
-			p.serviceCache.Set(ip, results)
-		}(ip)
+	for _, key := range targets {
+		index := targetIndex[key]
+		var tag string
+		if key.Route == "warp" {
+			tag = fmt.Sprintf("warp_%d_out", index)
+		} else {
+			tag = fmt.Sprintf("proxy_%d_out", index)
+		}
+		client := ep.HTTPClient(tag, timeout)
+		perTarget := p.cfg.ServiceCheckPerTargetConcurrent
+		if perTarget < 1 {
+			perTarget = 1
+		}
+		targetSem := make(chan struct{}, perTarget)
+		for _, checker := range targetsByKey[key].stale {
+			wg.Add(1)
+			go func(key servicecheck.RouteKey, checker servicecheck.Checker) {
+				defer wg.Done()
+				select {
+				case targetSem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-targetSem }()
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-sem }()
+				probeCtx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				result := checker.Check(probeCtx, client)
+				p.serviceCache.Set(key, result)
+			}(key, checker)
+		}
 	}
 	wg.Wait()
-	result.Checked = len(stale)
+	result.Checked = len(targets)
+	p.checkMu.Lock()
+	if p.checkRuns == nil {
+		p.checkRuns = make(map[string]time.Time)
+	}
+	p.checkRuns["service"] = time.Now()
+	p.checkMu.Unlock()
 	p.refreshServiceMetrics()
 	return result
 }
@@ -977,6 +1040,7 @@ func (p *Pipeline) checkPorts(ctx context.Context, probes map[int]*exitprobe.Exi
 	wg.Wait()
 	return byIP
 }
+
 // startCheckPlaceViaPool builds a CheckPlace provider routed through the first
 // healthy proxy in the pool that can reach ipinfo.check.place without a
 // Cloudflare block. It returns nil if no proxy works or the feature is off.
@@ -1024,19 +1088,19 @@ func cloneCachedEntries(entries []CachedEntry) []CachedEntry {
 	result := make([]CachedEntry, len(entries))
 	for i, entry := range entries {
 		result[i] = CachedEntry{
-			Entry:         cloneRenamedEntry(entry.Entry),
-			WarpEntry:     cloneRenamedEntry(entry.WarpEntry),
-			Countries:     entry.Countries,
-			DirectHealthy: entry.DirectHealthy,
-			WarpHealthy:    entry.WarpHealthy,
-			Intel:         cloneIntel(entry.Intel),
-			WarpIntel:     cloneIntel(entry.WarpIntel),
-			Services:      append([]servicecheck.Result(nil), entry.Services...),
-			WarpServices:  append([]servicecheck.Result(nil), entry.WarpServices...),
-			PortResults:     append([]portcheck.PortResult(nil), entry.PortResults...),
-			WarpPortResults: append([]portcheck.PortResult(nil), entry.WarpPortResults...),
-			DNSBLResults:      append([]dnsbl.Result(nil), entry.DNSBLResults...),
-			WarpDNSBLResults:  append([]dnsbl.Result(nil), entry.WarpDNSBLResults...),
+			Entry:            cloneRenamedEntry(entry.Entry),
+			WarpEntry:        cloneRenamedEntry(entry.WarpEntry),
+			Countries:        entry.Countries,
+			DirectHealthy:    entry.DirectHealthy,
+			WarpHealthy:      entry.WarpHealthy,
+			Intel:            cloneIntel(entry.Intel),
+			WarpIntel:        cloneIntel(entry.WarpIntel),
+			Services:         append([]servicecheck.Result(nil), entry.Services...),
+			WarpServices:     append([]servicecheck.Result(nil), entry.WarpServices...),
+			PortResults:      append([]portcheck.PortResult(nil), entry.PortResults...),
+			WarpPortResults:  append([]portcheck.PortResult(nil), entry.WarpPortResults...),
+			DNSBLResults:     append([]dnsbl.Result(nil), entry.DNSBLResults...),
+			WarpDNSBLResults: append([]dnsbl.Result(nil), entry.WarpDNSBLResults...),
 		}
 	}
 	return result

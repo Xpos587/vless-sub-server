@@ -2,6 +2,7 @@ package dnsbl
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"strings"
@@ -85,14 +86,32 @@ func lookup(ctx context.Context, resolver *net.Resolver, reversed string, list L
 	defer cancel()
 	name := reversed + "." + list.Zone
 	ips, err := resolver.LookupHost(queryCtx, name)
-	if err != nil || len(ips) == 0 {
+	status := classifyLookup(ips, err)
+	if status == StatusClean {
 		return Result{Zone: list.Zone, Name: list.Name, Status: StatusClean}
 	}
-	code := ips[0]
-	if strings.HasPrefix(code, "127.") {
-		return Result{Zone: list.Zone, Name: list.Name, Listed: true, ReturnCode: code, Status: StatusListed}
+	if status == StatusUnknown {
+		return Result{Zone: list.Zone, Name: list.Name, Status: StatusUnknown}
 	}
-	return Result{Zone: list.Zone, Name: list.Name, ReturnCode: code, Status: StatusUnknown}
+	code := ips[0]
+	return Result{Zone: list.Zone, Name: list.Name, Listed: true, ReturnCode: code, Status: StatusListed}
+}
+
+func classifyLookup(ips []string, err error) string {
+	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return StatusClean
+		}
+		return StatusUnknown
+	}
+	if len(ips) == 0 {
+		return StatusUnknown
+	}
+	if strings.HasPrefix(ips[0], "127.") {
+		return StatusListed
+	}
+	return StatusUnknown
 }
 
 func reverseIPv4(ip netip.Addr) (string, bool) {

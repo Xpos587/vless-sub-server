@@ -70,6 +70,38 @@ func TestCacheLookup(t *testing.T) {
 	}
 }
 
+type statsProvider struct {
+	name   string
+	result Result
+	ok     bool
+}
+
+func (p statsProvider) Name() string { return p.name }
+func (p statsProvider) Lookup(context.Context, netip.Addr) (Result, bool) {
+	return p.result, p.ok
+}
+
+func TestAggregatorCountsProviderOutcomes(t *testing.T) {
+	aggregator := NewAggregator([]Provider{
+		statsProvider{name: "good", result: Result{Source: "good", Type: TypeResidential}, ok: true},
+		statsProvider{name: "bad", ok: false},
+	}, time.Hour)
+	_, _ = aggregator.Lookup(context.Background(), netip.MustParseAddr("203.0.113.8"))
+	stats := aggregator.ProviderStats()
+	assertProviderStat(t, stats, "good", ProviderSuccess, 1)
+	assertProviderStat(t, stats, "bad", ProviderTransport, 1)
+}
+
+func assertProviderStat(t *testing.T, stats []ProviderStat, provider string, outcome ProviderOutcome, count uint64) {
+	t.Helper()
+	for _, stat := range stats {
+		if stat.Provider == provider && stat.Outcome == outcome && stat.Count == count {
+			return
+		}
+	}
+	t.Fatalf("missing provider stat %s/%s=%d in %#v", provider, outcome, count, stats)
+}
+
 func TestIPAPIISLookup(t *testing.T) {
 	body := `{"ip":"8.8.8.8","is_datacenter":true,"is_proxy":false,"is_vpn":true,"is_abuser":true,"is_tor":false,"is_crawler":false,"asn":{"asn":15169,"org":"Google LLC","type":"hosting"},"company":{"name":"Google LLC","type":"hosting","abuser_score":"0.25 (High)"},"location":{"country_code":"US","city":"Mountain View"}}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

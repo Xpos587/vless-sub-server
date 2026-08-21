@@ -78,7 +78,7 @@ func (p *Pipeline) retryFailedFetchesViaPool(ctx context.Context, fetched []fetc
 	if len(candidates) == 0 {
 		return fetched
 	}
-	gateway, err := exitprobe.StartFetchGateway(candidates)
+	gateway, err := exitprobe.StartFetchGatewayContext(ctx, candidates)
 	if err != nil {
 		log.Printf("[fetch] gateway start failed: %v", err)
 		return fetched

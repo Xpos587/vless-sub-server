@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"net/netip"
 	"strings"
 	"testing"
@@ -9,13 +10,68 @@ import (
 	"github.com/michael/vless-sub-server/internal/config"
 	"github.com/michael/vless-sub-server/internal/country"
 	"github.com/michael/vless-sub-server/internal/dns"
+	"github.com/michael/vless-sub-server/internal/dnsbl"
+	"github.com/michael/vless-sub-server/internal/enrichment"
 	"github.com/michael/vless-sub-server/internal/exitprobe"
 	"github.com/michael/vless-sub-server/internal/format"
 	"github.com/michael/vless-sub-server/internal/geo"
+	"github.com/michael/vless-sub-server/internal/ipintel"
 	"github.com/michael/vless-sub-server/internal/parse"
+	"github.com/michael/vless-sub-server/internal/portcheck"
 	"github.com/michael/vless-sub-server/internal/quality"
 	"github.com/michael/vless-sub-server/internal/rename"
 )
+
+func TestRunEnrichmentChecksProcessesUniqueIPsAndUpdatesCachedEntries(t *testing.T) {
+	ip := netip.MustParseAddr("203.0.113.44")
+	countries := country.RouteCountries{DirectV4: country.FamilyResult{Available: true, IP: ip, Country: "US"}}
+	p := &Pipeline{
+		cfg: &config.Config{
+			IPIntelEnabled:               true,
+			PortCheckEnabled:             true,
+			DNSBLEnabled:                 true,
+			EnrichmentCheckBatchSize:     10,
+			EnrichmentCheckMaxConcurrent: 2,
+		},
+		intelCache: enrichment.NewCache[ipintel.Intel](time.Hour),
+		portCache:  enrichment.NewCache[[]portcheck.PortResult](time.Hour),
+		dnsblCache: enrichment.NewCache[[]dnsbl.Result](time.Hour),
+	}
+	intelCalls, portCalls, dnsblCalls := 0, 0, 0
+	p.intelLookup = func(context.Context, netip.Addr) (ipintel.Intel, bool) {
+		intelCalls++
+		return ipintel.Intel{IP: ip.String(), Type: ipintel.TypeHosting, RiskLevel: ipintel.RiskSuspicious}, true
+	}
+	p.portLookup = func(context.Context, string) []portcheck.PortResult {
+		portCalls++
+		return []portcheck.PortResult{{Port: 80, Status: portcheck.Open}}
+	}
+	p.dnsblLookup = func(context.Context, netip.Addr) []dnsbl.Result {
+		dnsblCalls++
+		return []dnsbl.Result{{Zone: "zen.spamhaus.org", Status: dnsbl.StatusClean}}
+	}
+	p.cache.Store(&CachedData{Entries: []CachedEntry{
+		{DirectHealthy: true, Countries: countries},
+		{DirectHealthy: true, Countries: countries},
+	}})
+
+	result := p.RunEnrichmentChecks(context.Background())
+	if result.Candidates != 1 || result.Checked != 1 || intelCalls != 1 || portCalls != 1 || dnsblCalls != 1 {
+		t.Fatalf("result=%#v calls=%d/%d/%d", result, intelCalls, portCalls, dnsblCalls)
+	}
+	cached, _ := p.Cached()
+	for _, entry := range cached.Entries {
+		if entry.Intel == nil || entry.Intel.Type != ipintel.TypeHosting || len(entry.PortResults) != 1 || len(entry.DNSBLResults) != 1 {
+			t.Fatalf("entry was not enriched: %#v", entry)
+		}
+	}
+}
+
+func TestTraceValueExtractsExitIP(t *testing.T) {
+	if got := traceValue("fl=1\nip=203.0.113.9\nloc=US\n", "ip"); got != "203.0.113.9" {
+		t.Fatalf("trace IP = %q", got)
+	}
+}
 
 func TestCanPublishRejectsEmptyReplacementOfExistingCache(t *testing.T) {
 	if CanPublish(0, true) {

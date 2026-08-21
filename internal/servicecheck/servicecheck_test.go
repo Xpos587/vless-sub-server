@@ -1,6 +1,12 @@
 package servicecheck
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
 
 func TestDefaultCheckersOrder(t *testing.T) {
 	checkers := DefaultCheckers()
@@ -36,5 +42,36 @@ func TestExtractRedditRegion(t *testing.T) {
 	}
 	if region := extractRedditRegion("no country"); region != "" {
 		t.Fatalf("region = %s, want empty", region)
+	}
+}
+
+func TestResultReasonNormalizesUnknownFailures(t *testing.T) {
+	tests := []struct {
+		result Result
+		want   string
+	}{
+		{Result{Status: Available}, ""},
+		{Result{Status: Unknown, Reason: "timeout", Detail: "request failed"}, "timeout"},
+		{Result{Status: Unknown, Detail: "Cloudflare challenge"}, "challenge"},
+		{Result{Status: Unknown, Detail: "unexpected HTTP status"}, "unexpected_status"},
+		{Result{Status: Unknown, Detail: "region not found in page"}, "parse_error"},
+		{Result{Status: Unknown, Detail: "request failed"}, "transport"},
+	}
+	for _, test := range tests {
+		if got := ResultReason(test.result); got != test.want {
+			t.Fatalf("ResultReason(%#v) = %q, want %q", test.result, got, test.want)
+		}
+	}
+}
+
+func TestFetchClassifiesClientTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	result := fetch(context.Background(), &http.Client{Timeout: 5 * time.Millisecond}, server.URL, nil)
+	if result.ok || result.reason != "timeout" {
+		t.Fatalf("fetch result = %#v", result)
 	}
 }

@@ -22,12 +22,27 @@ import (
 type FetchGateway struct {
 	instance *core.Instance
 	tags     []string
+	ownsCore bool
 }
 
 func StartFetchGateway(records []parse.ProxyRecord) (*FetchGateway, error) {
+	return StartFetchGatewayContext(context.Background(), records)
+}
+
+func StartFetchGatewayContext(ctx context.Context, records []parse.ProxyRecord) (*FetchGateway, error) {
 	if len(records) == 0 {
 		return nil, fmt.Errorf("no gateway records")
 	}
+
+	if err := acquireEmbeddedXray(ctx); err != nil {
+		return nil, fmt.Errorf("wait for embedded xray: %w", err)
+	}
+	started := false
+	defer func() {
+		if !started {
+			releaseEmbeddedXray()
+		}
+	}()
 
 	cfg := xrayDialConfig{Log: map[string]any{"loglevel": "error"}}
 	tags := make([]string, len(records))
@@ -55,7 +70,8 @@ func StartFetchGateway(records []parse.ProxyRecord) (*FetchGateway, error) {
 	if err := instance.Start(); err != nil {
 		return nil, fmt.Errorf("start gateway instance: %w", err)
 	}
-	return &FetchGateway{instance: instance, tags: tags}, nil
+	started = true
+	return &FetchGateway{instance: instance, tags: tags, ownsCore: true}, nil
 }
 
 func (g *FetchGateway) Tags() []string {
@@ -83,5 +99,9 @@ func (g *FetchGateway) Close() {
 	if g.instance != nil {
 		g.instance.Close()
 		g.instance = nil
+	}
+	if g.ownsCore {
+		g.ownsCore = false
+		releaseEmbeddedXray()
 	}
 }

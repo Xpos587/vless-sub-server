@@ -89,7 +89,7 @@ func (e aiEndpoint) Name() string { return e.id }
 func (e aiEndpoint) Check(ctx context.Context, client *http.Client) Result {
 	r := fetch(ctx, client, e.url, e.headers)
 	if !r.ok {
-		return Result{Service: e.id, Status: Unknown, Detail: "request failed"}
+		return requestFailure(e.id, r)
 	}
 	lower := strings.ToLower(r.body)
 	if isChallenge(r.status, lower) {
